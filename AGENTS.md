@@ -17,6 +17,23 @@ without publishing that user's secrets, paths, account data, or chat contents.
 - `config/`: examples only. Real generated files are ignored.
 - `docs/`: installation, device, compatibility, and tunnel contracts.
 
+## README writing style
+
+- Keep `README.md` Chinese-first and keep `docs/README_EN.md` aligned with it.
+- Write for someone deciding whether and how to use the project: begin with the
+  real problem, explain the self-hosted solution, then show the architecture,
+  features, requirements, and quickest safe setup path.
+- Use natural, concrete prose and short sections. Prefer user-visible outcomes
+  over implementation or agent-process commentary.
+- Do not stuff SEO keywords into sentences or add a keyword block. Let accurate
+  terms such as Codex, Android, macOS, self-hosted, FRP, WebSocket, and reverse
+  proxy appear naturally where they are useful.
+- Keep claims technically precise. In particular, say clearly that this project
+  connects the phone to the user's Mac; it is not an OpenAI API proxy, VPN, or
+  network accelerator.
+- Avoid exposing repository-cleanup details, private deployment history, or
+  author-specific configuration in public-facing copy.
+
 ## Non-negotiable safety rules
 
 1. Never commit `.env`, `config/pairing.json`, signing material, tunnel config,
