@@ -17,7 +17,7 @@ assert.equal(resolveProjectId({ id: "other", cwd: "/tmp" }, catalog), OTHER_PROJ
 
 const result = enrichThreadList({ data: [
   { id: "assigned", cwd: "/somewhere/else", name: "会话二" },
-  { id: "nested", cwd: "/work/hyde", name: "会话一" },
+  { id: "nested", cwd: "/work/hyde", name: "会话一", mobileActivity: "running", completionRevision: "turn-1" },
   { id: "nested", cwd: "/work/hyde", name: "重复会话" },
   { id: "other", cwd: "/tmp", name: "其他" },
 ] }, catalog);
@@ -28,5 +28,7 @@ assert.deepEqual(result.projects.map((project) => [project.id, project.threadCou
   ["p2", 1],
   [OTHER_PROJECT_ID, 1],
 ]);
+assert.equal(result.data[1].mobileActivity, "running");
+assert.equal(result.data[1].completionRevision, "turn-1");
 
 console.log("project catalog mapping: ok");

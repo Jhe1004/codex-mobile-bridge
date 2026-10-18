@@ -116,6 +116,7 @@ private val SoftSurfaceStrong = Color(0xFFF1F1F1)
 private val OutlineSoft = Color(0xFFE5E5E5)
 private val Muted = Color(0xFF6B6B6B)
 private val Accent = Color(0xFF10A37F)
+private val UnreadBlue = Color(0xFF3B82F6)
 
 private val ChatGptColorScheme = lightColorScheme(
     primary = Ink,
@@ -390,6 +391,13 @@ private fun ProjectTreeScreen(state: BridgeUiState, onBatterySettings: () -> Uni
             state.projects.forEach { project ->
                 val expanded = project.id in state.expandedProjectIds
                 val projectThreads = state.threads.filter { it.projectId == project.id }
+                val runningCount = projectThreads.count { it.activity == ThreadActivity.RUNNING }
+                val unreadCount = projectThreads.count { it.activity == ThreadActivity.UNREAD }
+                val projectStatus = buildList {
+                    add("${projectThreads.size} 个会话")
+                    if (runningCount > 0) add("$runningCount 个运行中")
+                    if (unreadCount > 0) add("$unreadCount 个未读")
+                }.joinToString(" · ")
                 item(key = "project-${project.id}") {
                     Surface(
                         color = SoftSurface,
@@ -404,7 +412,7 @@ private fun ProjectTreeScreen(state: BridgeUiState, onBatterySettings: () -> Uni
                                 Text(if (expanded) "⌄" else "›", style = MaterialTheme.typography.titleLarge, color = Muted)
                                 Column(Modifier.padding(start = 12.dp).weight(1f)) {
                                     Text(project.name, fontWeight = FontWeight.SemiBold, color = Ink)
-                                    Text("${projectThreads.size} 个会话", style = MaterialTheme.typography.labelSmall, color = Muted)
+                                    Text(projectStatus, style = MaterialTheme.typography.labelSmall, color = if (runningCount + unreadCount > 0) Accent else Muted)
                                 }
                             }
                             if (project.rootPath.isNotBlank()) {
@@ -421,12 +429,20 @@ private fun ProjectTreeScreen(state: BridgeUiState, onBatterySettings: () -> Uni
                             shape = RoundedCornerShape(14.dp),
                             modifier = Modifier.padding(start = 42.dp, end = 14.dp, top = 1.dp, bottom = 1.dp).fillMaxWidth(),
                         ) {
-                            Text(
-                                thread.title,
-                                color = Ink,
-                                maxLines = 2,
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-                            )
+                            Row(
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp).fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    thread.title,
+                                    color = Ink,
+                                    maxLines = 2,
+                                    fontWeight = if (thread.activity == ThreadActivity.UNREAD) FontWeight.SemiBold else FontWeight.Normal,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                Spacer(Modifier.size(10.dp))
+                                ThreadActivityIndicator(thread.activity)
+                            }
                         }
                     }
                     if (projectThreads.isEmpty()) {
@@ -438,6 +454,53 @@ private fun ProjectTreeScreen(state: BridgeUiState, onBatterySettings: () -> Uni
             }
             item { Spacer(Modifier.height(80.dp)) }
         }
+    }
+}
+
+@Composable
+private fun ThreadActivityIndicator(activity: ThreadActivity) {
+    val color = when (activity) {
+        ThreadActivity.RUNNING -> Accent
+        ThreadActivity.UNREAD -> UnreadBlue
+        ThreadActivity.IDLE -> Muted
+    }
+    val label = when (activity) {
+        ThreadActivity.RUNNING -> "运行中"
+        ThreadActivity.UNREAD -> "新回复"
+        ThreadActivity.IDLE -> "空闲"
+    }
+    val alpha = if (activity == ThreadActivity.RUNNING) {
+        val transition = rememberInfiniteTransition(label = "thread-activity")
+        val runningPulse by transition.animateFloat(
+            initialValue = 0.45f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 700),
+                repeatMode = RepeatMode.Reverse,
+            ),
+            label = "thread-running-pulse",
+        )
+        runningPulse
+    } else {
+        1f
+    }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.semantics { contentDescription = "会话状态：$label" },
+    ) {
+        Box(
+            Modifier
+                .size(if (activity == ThreadActivity.IDLE) 6.dp else 8.dp)
+                .alpha(alpha)
+                .background(color, CircleShape),
+        )
+        Text(
+            label,
+            color = color,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = if (activity == ThreadActivity.IDLE) FontWeight.Normal else FontWeight.SemiBold,
+            modifier = Modifier.padding(start = 5.dp),
+        )
     }
 }
 

@@ -1,5 +1,23 @@
 package org.codexmobile.bridge
 
+enum class ThreadActivity {
+    RUNNING,
+    UNREAD,
+    IDLE,
+}
+
+internal fun displayedThreadActivity(
+    runtimeActivity: ThreadActivity,
+    completionRevision: String,
+    seenRevision: String?,
+    initialized: Boolean,
+    selected: Boolean,
+): ThreadActivity = when {
+    runtimeActivity == ThreadActivity.RUNNING -> ThreadActivity.RUNNING
+    !initialized || selected || completionRevision.isBlank() || seenRevision == completionRevision -> ThreadActivity.IDLE
+    else -> ThreadActivity.UNREAD
+}
+
 data class ThreadSummary(
     val id: String,
     val title: String,
@@ -7,6 +25,8 @@ data class ThreadSummary(
     val cwd: String,
     val updatedAt: Long,
     val projectId: String,
+    val activity: ThreadActivity = ThreadActivity.IDLE,
+    val completionRevision: String = "",
 )
 
 data class ProjectSummary(

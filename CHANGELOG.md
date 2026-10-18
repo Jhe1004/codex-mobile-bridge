@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.13.0 - 2026-10-19
+
+- Added live per-conversation Running, New Reply, and Idle indicators to the Android home screen.
+- Added project-level running and unread counters.
+- Added local read tracking that establishes a clean first-run baseline and marks a completed conversation read when opened.
+- Added a privacy-preserving Mac-side status projection from Codex lifecycle records without sending local file paths to the phone.
+
 ## 0.12.0 - 2026-10-19
 
 - Added native long-press text selection and system copy actions to every chat message.

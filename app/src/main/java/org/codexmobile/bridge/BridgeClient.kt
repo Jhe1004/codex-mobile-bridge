@@ -58,6 +58,8 @@ object BridgeClient {
     @Volatile private var activeTransferFile: File? = null
     private var reconnectDelay = 1_000L
     private const val SEQUENCE_PREFS = "relay_sequence_v2"
+    private const val THREAD_READ_PREFS = "thread_read_state_v1"
+    private const val THREAD_READ_INITIALIZED = "__initialized__"
     @Volatile private var sequenceKey = "default"
 
     fun start(context: Context) {
@@ -107,17 +109,20 @@ object BridgeClient {
     }
 
     fun selectThread(thread: ThreadSummary) {
+        markThreadRead(thread)
+        val selected = thread.copy(activity = if (thread.activity == ThreadActivity.UNREAD) ThreadActivity.IDLE else thread.activity)
         _state.value = _state.value.copy(
-            selectedThread = thread,
+            threads = _state.value.threads.map { if (it.id == thread.id) selected else it },
+            selectedThread = selected,
             messages = emptyList(),
             streamingText = "",
             lastTurnCompletedAtMs = null,
             sendPending = false,
-            preparingThreadId = thread.id,
+            preparingThreadId = selected.id,
             preparedThreadId = null,
             error = null,
         )
-        prepareThread(thread.id)
+        prepareThread(selected.id)
         refreshSelectedThread()
     }
 
@@ -587,12 +592,16 @@ object BridgeClient {
 
     private fun handleEvent(event: String, data: JSONObject) {
         val selectedId = _state.value.selectedThread?.id
+        val eventThreadId = data.optString("threadId")
         when (event) {
-            "turn/started" -> if (data.optString("threadId") == selectedId) {
-                _state.value = _state.value.copy(
-                    activeTurnId = data.optJSONObject("turn")?.optString("id"),
-                    lastTurnCompletedAtMs = null,
-                )
+            "turn/started" -> {
+                updateThreadActivity(eventThreadId, ThreadActivity.RUNNING)
+                if (eventThreadId == selectedId) {
+                    _state.value = _state.value.copy(
+                        activeTurnId = data.optJSONObject("turn")?.optString("id"),
+                        lastTurnCompletedAtMs = null,
+                    )
+                }
             }
             "item/agentMessage/delta" -> if (data.optString("threadId") == selectedId) {
                 _state.value = _state.value.copy(streamingText = _state.value.streamingText + data.optString("delta"))
@@ -610,16 +619,22 @@ object BridgeClient {
                     }
                 }
             }
-            "turn/completed" -> if (data.optString("threadId") == selectedId) {
-                _state.value = _state.value.copy(
-                    activeTurnId = null,
-                    streamingText = "",
-                    sendPending = false,
-                    lastTurnCompletedAtMs = System.currentTimeMillis(),
-                )
-                notifyCompleted()
+            "turn/completed" -> {
+                val revision = data.optJSONObject("turn")?.optString("id")
+                    .orEmpty().ifBlank { data.optString("turnId") }
+                val isSelected = eventThreadId == selectedId
+                updateThreadCompletion(eventThreadId, revision, isSelected)
+                if (isSelected) {
+                    _state.value = _state.value.copy(
+                        activeTurnId = null,
+                        streamingText = "",
+                        sendPending = false,
+                        lastTurnCompletedAtMs = System.currentTimeMillis(),
+                    )
+                    notifyCompleted()
+                    refreshSelectedThread()
+                }
                 refreshThreads()
-                refreshSelectedThread()
             }
             "appServer.request" -> {
                 val method = data.optString("method")
@@ -637,7 +652,7 @@ object BridgeClient {
 
     private fun parseThreads(result: JSONObject) {
         val array = result.optJSONArray("data") ?: JSONArray()
-        val items = buildList {
+        val rawItems = buildList {
             for (i in 0 until array.length()) array.optJSONObject(i)?.let { add(threadSummary(it, it.optString("projectId"))) }
         }
         val projectArray = result.optJSONArray("projects") ?: JSONArray()
@@ -656,6 +671,7 @@ object BridgeClient {
             }
         }
         val previous = _state.value
+        val items = applyReadState(rawItems, previous.selectedThread?.id)
         val selectedProject = previous.selectedProject?.let { selected ->
             projects.firstOrNull { it.id == selected.id } ?: selected
         }
@@ -691,7 +707,62 @@ object BridgeClient {
             cwd = obj.optString("cwd"),
             updatedAt = obj.optLong("updatedAt", obj.optLong("updated_at", 0)),
             projectId = obj.optString("projectId").ifBlank { fallbackProjectId },
+            activity = if (obj.optString("mobileActivity") == "running") ThreadActivity.RUNNING else ThreadActivity.IDLE,
+            completionRevision = obj.optString("completionRevision"),
         )
+    }
+
+    private fun applyReadState(items: List<ThreadSummary>, selectedThreadId: String?): List<ThreadSummary> {
+        val context = appContext ?: return items
+        val preferences = context.getSharedPreferences(THREAD_READ_PREFS, Context.MODE_PRIVATE)
+        val initialized = preferences.getBoolean(THREAD_READ_INITIALIZED, false)
+        val editor = preferences.edit()
+        if (!initialized) editor.putBoolean(THREAD_READ_INITIALIZED, true)
+        val projected = items.map { thread ->
+            val revision = thread.completionRevision
+            val selected = thread.id == selectedThreadId
+            val knownThread = preferences.contains(thread.id)
+            val seenRevision = preferences.getString(thread.id, null)
+            if ((!initialized || !knownThread || selected) && revision.isNotBlank()) editor.putString(thread.id, revision)
+            thread.copy(
+                activity = displayedThreadActivity(
+                    runtimeActivity = thread.activity,
+                    completionRevision = revision,
+                    seenRevision = seenRevision,
+                    initialized = initialized && knownThread,
+                    selected = selected,
+                )
+            )
+        }
+        editor.apply()
+        return projected
+    }
+
+    private fun markThreadRead(thread: ThreadSummary) {
+        if (thread.completionRevision.isBlank()) return
+        appContext?.getSharedPreferences(THREAD_READ_PREFS, Context.MODE_PRIVATE)
+            ?.edit()?.putString(thread.id, thread.completionRevision)?.apply()
+    }
+
+    private fun updateThreadActivity(threadId: String, activity: ThreadActivity) {
+        if (threadId.isBlank()) return
+        _state.value = _state.value.copy(
+            threads = _state.value.threads.map { if (it.id == threadId) it.copy(activity = activity) else it },
+        )
+    }
+
+    private fun updateThreadCompletion(threadId: String, revision: String, selected: Boolean) {
+        if (threadId.isBlank()) return
+        val normalizedRevision = revision.ifBlank { "completed:${System.currentTimeMillis()}" }
+        val activity = if (selected) ThreadActivity.IDLE else ThreadActivity.UNREAD
+        val updatedThreads = _state.value.threads.map {
+            if (it.id == threadId) it.copy(activity = activity, completionRevision = normalizedRevision) else it
+        }
+        val selectedThread = _state.value.selectedThread?.let {
+            if (it.id == threadId) it.copy(activity = activity, completionRevision = normalizedRevision) else it
+        }
+        _state.value = _state.value.copy(threads = updatedThreads, selectedThread = selectedThread)
+        if (selected) markThreadRead(selectedThread ?: return)
     }
 
     private fun jsonText(obj: JSONObject, key: String): String =

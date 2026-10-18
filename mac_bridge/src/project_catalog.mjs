@@ -59,6 +59,9 @@ export function enrichThreadList(result, catalog) {
       createdAt: thread.createdAt ?? thread.created_at ?? 0,
       updatedAt: thread.updatedAt ?? thread.updated_at ?? 0,
       status: thread.status ?? null,
+      mobileActivity: thread.mobileActivity ?? "idle",
+      completionRevision: thread.completionRevision ?? "",
+      completedAt: thread.completedAt ?? 0,
       isPinned: thread.isPinned ?? false,
       projectId: resolveProjectId(thread, catalog),
     }));

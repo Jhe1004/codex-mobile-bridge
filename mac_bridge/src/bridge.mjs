@@ -11,6 +11,7 @@ import { readableAppServerError, startTurnOnThread } from "./turn_start.mjs";
 import { DesktopIpcClient } from "./desktop_ipc.mjs";
 import { createDesktopThreadPreparer } from "./desktop_prepare.mjs";
 import { wakeDesktopThread } from "./desktop_wake.mjs";
+import { createThreadStatusAnalyzer } from "./thread_status.mjs";
 
 const projectRoot = process.env.CODEX_PROJECT_ROOT || os.homedir();
 const relayBase = process.env.RELAY_URL || "ws://127.0.0.1:18880/v1/ws";
@@ -44,6 +45,7 @@ const bridgeOwnedThreads = new Set();
 let bridgeReleaseTimer = null;
 let lastProjectCatalog = { projects: [], assignments: {} };
 const knownThreads = new Map();
+let snapshotInFlight = false;
 
 function allowedRootsForThread(threadId) {
   const thread = knownThreads.get(threadId);
@@ -55,6 +57,7 @@ function allowedRootsForThread(threadId) {
 const fileAccess = createFileAccess({ getAllowedRoots: allowedRootsForThread });
 const desktopIpc = new DesktopIpcClient();
 const desktopPreparer = createDesktopThreadPreparer({ desktopIpc, wakeDesktopThread });
+const annotateThreadStatuses = createThreadStatusAnalyzer();
 
 function sendRelay(message) {
   if (relay?.readyState !== WebSocket.OPEN) return false;
@@ -103,18 +106,22 @@ async function listAllThreads(options = {}) {
     all.push(...(result.data ?? []));
     cursor = result.nextCursor ?? null;
   } while (cursor);
-  const enriched = enrichThreadList({ data: all, nextCursor: null }, currentProjectCatalog());
+  const enriched = enrichThreadList({ data: annotateThreadStatuses(all), nextCursor: null }, currentProjectCatalog());
   knownThreads.clear();
   for (const thread of enriched.data) knownThreads.set(thread.id, thread);
   return enriched;
 }
 
 async function initialSnapshot() {
+  if (snapshotInFlight) return;
+  snapshotInFlight = true;
   try {
     const result = await listAllThreads();
     sendRelay({ type: "snapshot", snapshot: "thread.list", result });
   } catch (error) {
     sendRelay({ type: "status", component: "app-server", ok: false, message: error.message });
+  } finally {
+    snapshotInFlight = false;
   }
 }
 
@@ -143,6 +150,9 @@ function handleAppMessage(message) {
         log("bridge_thread_turn_completed", { threadId, remainingOwnedThreads: bridgeOwnedThreads.size });
         if (bridgeOwnedThreads.size === 0) scheduleBridgeWriterRelease("turn-completed", 350);
       }
+      void initialSnapshot();
+    } else if (message.method === "turn/started") {
+      void initialSnapshot();
     }
   }
 }
@@ -338,3 +348,6 @@ process.on("SIGINT", () => shutdown("SIGINT"));
 
 await startAppServer();
 connectRelay();
+setInterval(() => {
+  if (appReady && relay?.readyState === WebSocket.OPEN) void initialSnapshot();
+}, 10_000).unref();

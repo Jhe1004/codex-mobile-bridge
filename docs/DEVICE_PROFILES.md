@@ -33,6 +33,9 @@ ignored `config/device-profile.json` records only non-secret compatibility data.
   without visibly animating through the entire history.
 - Keep chat Markdown inside a selection container so long-press selection,
   drag handles, and the native copy menu remain available on every device.
+- Keep conversation status text visible beside its color dot; running, unread,
+  and idle states must not depend on color alone, and each state needs an
+  accessibility description.
 
 ## Validation matrix
 
@@ -40,3 +43,5 @@ At minimum, test one phone on API 28-32 and one modern phone/emulator on API
 33+. For a foldable/tablet change, test compact and expanded widths. For every
 device verify: first pairing, reconnect, screen-off recovery, chat switching,
 Markdown, HTML full-screen mode, local-file preview, and launcher icon mask.
+Also verify that a running conversation changes to unread after completion and
+returns to idle after the user opens it.
