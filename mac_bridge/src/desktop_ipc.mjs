@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 const INITIAL_CLIENT_ID = "initializing-client";
 const DEFAULT_TIMEOUT_MS = 10_000;
 const METHOD_VERSIONS = {
+  "thread-stream-following-changed": 1,
   "thread-owner-discovery": 1,
   "thread-follower-start-turn": 2,
 };
@@ -100,30 +101,51 @@ export class DesktopIpcClient {
   async startTurn(threadId, text, clientUserMessageId = randomUUID(), knownOwnerClientId = null) {
     const ownerClientId = knownOwnerClientId || await this.findThreadOwner(threadId);
     if (!ownerClientId) throw new DesktopOwnerUnavailableError();
-    const response = await this.#request(
-      "thread-follower-start-turn",
-      {
-        conversationId: threadId,
-        turnStart: {
-          request: {
-            threadId,
-            // Desktop keeps this richer text shape in its in-memory turn state.
-            // The app-server accepts plain { type, text }, but the Desktop
-            // renderer also reads text_elements while rendering the turn.
-            input: [{ type: "text", text, text_elements: [] }],
-            clientUserMessageId,
+    let following = false;
+    try {
+      // Register the bridge as a read-only follower before the turn starts.
+      // Codex keeps an inactive Desktop owner alive while it has followers, so
+      // its completion observer cannot be retired when the user switches chats.
+      await this.setThreadFollowing(threadId, ownerClientId, true);
+      following = true;
+      const response = await this.#request(
+        "thread-follower-start-turn",
+        {
+          conversationId: threadId,
+          turnStart: {
+            request: {
+              threadId,
+              // Desktop keeps this richer text shape in its in-memory turn state.
+              // The app-server accepts plain { type, text }, but the Desktop
+              // renderer also reads text_elements while rendering the turn.
+              input: [{ type: "text", text, text_elements: [] }],
+              clientUserMessageId,
+            },
+            context: {},
           },
-          context: {},
         },
-      },
-      {
-        version: METHOD_VERSIONS["thread-follower-start-turn"],
-        targetClientId: ownerClientId,
-        timeoutMs: 120_000,
-      },
+        {
+          version: METHOD_VERSIONS["thread-follower-start-turn"],
+          targetClientId: ownerClientId,
+          timeoutMs: 120_000,
+        },
+      );
+      if (response.resultType !== "success") throw new Error(response.error || "Desktop owner rejected the turn");
+      return { ownerClientId, response, clientUserMessageId, following };
+    } catch (error) {
+      if (following) await this.setThreadFollowing(threadId, ownerClientId, false).catch(() => {});
+      throw error;
+    }
+  }
+
+  async setThreadFollowing(threadId, ownerClientId, following) {
+    await this.connect();
+    if (!ownerClientId) throw new DesktopOwnerUnavailableError();
+    this.#broadcast(
+      "thread-stream-following-changed",
+      { conversationId: threadId, hostId: "local", following: Boolean(following) },
+      { version: METHOD_VERSIONS["thread-stream-following-changed"], targetClientIds: [ownerClientId] },
     );
-    if (response.resultType !== "success") throw new Error(response.error || "Desktop owner rejected the turn");
-    return { ownerClientId, response, clientUserMessageId };
   }
 
   close() {
@@ -152,6 +174,20 @@ export class DesktopIpcClient {
       this.pending.set(requestId, { resolve, reject, timer });
       this.socket.write(encodeFrame(message));
     });
+  }
+
+  #broadcast(method, params, { version = 0, targetClientIds } = {}) {
+    if (!this.socket?.writable) throw new DesktopOwnerUnavailableError("Desktop IPC is not connected");
+    if (targetClientIds?.length === 0) return;
+    const message = {
+      type: "broadcast",
+      sourceClientId: this.clientId,
+      version,
+      method,
+      params,
+    };
+    if (targetClientIds) message.targetClientIds = targetClientIds;
+    this.socket.write(encodeFrame(message));
   }
 
   #onData(chunk) {

@@ -12,6 +12,7 @@ import { DesktopIpcClient } from "./desktop_ipc.mjs";
 import { createDesktopThreadPreparer } from "./desktop_prepare.mjs";
 import { wakeDesktopThread } from "./desktop_wake.mjs";
 import { createThreadStatusAnalyzer } from "./thread_status.mjs";
+import { DesktopCompletionReconciler } from "./desktop_completion_reconciler.mjs";
 
 const projectRoot = process.env.CODEX_PROJECT_ROOT || os.homedir();
 const relayBase = process.env.RELAY_URL || "ws://127.0.0.1:18880/v1/ws";
@@ -58,6 +59,10 @@ const fileAccess = createFileAccess({ getAllowedRoots: allowedRootsForThread });
 const desktopIpc = new DesktopIpcClient();
 const desktopPreparer = createDesktopThreadPreparer({ desktopIpc, wakeDesktopThread });
 const annotateThreadStatuses = createThreadStatusAnalyzer();
+const desktopCompletionReconciler = new DesktopCompletionReconciler({
+  desktopIpc,
+  onEvent: (event, extra) => log(event, extra),
+});
 
 function sendRelay(message) {
   if (relay?.readyState !== WebSocket.OPEN) return false;
@@ -117,6 +122,7 @@ async function initialSnapshot() {
   snapshotInFlight = true;
   try {
     const result = await listAllThreads();
+    desktopCompletionReconciler.observe(result.data);
     sendRelay({ type: "snapshot", snapshot: "thread.list", result });
   } catch (error) {
     sendRelay({ type: "status", component: "app-server", ok: false, message: error.message });
@@ -264,16 +270,29 @@ async function dispatchRequest(message) {
         if (result.thread?.id) scheduleBridgeWriterRelease("thread-started", 750);
         break;
       case "turn.start":
-        result = await startTurnOnThread(rpc, payload, {
-          desktopIpc,
-          preferBridge: bridgeOwnedThreads.has(payload.threadId),
-          prepareDesktopThread: (threadId) => desktopPreparer.prepare(threadId),
-          wakeDesktopThread,
-          onBridgeOwnership: (threadId) => {
-            bridgeOwnedThreads.add(threadId);
-          },
-        });
-        log("turn_delivery", { threadId: payload.threadId, delivery: result.delivery });
+        {
+          const startedAtMs = Date.now();
+          const baselineRevision = knownThreads.get(payload.threadId)?.completionRevision ?? "";
+          result = await startTurnOnThread(rpc, payload, {
+            desktopIpc,
+            preferBridge: bridgeOwnedThreads.has(payload.threadId),
+            prepareDesktopThread: (threadId) => desktopPreparer.prepare(threadId),
+            wakeDesktopThread,
+            onBridgeOwnership: (threadId) => {
+              bridgeOwnedThreads.add(threadId);
+            },
+          });
+          log("turn_delivery", { threadId: payload.threadId, delivery: result.delivery });
+          if (result.delivery.startsWith("desktop-ipc")) {
+            desktopCompletionReconciler.track({
+              threadId: payload.threadId,
+              ownerClientId: result.ownerClientId,
+              clientUserMessageId: result.clientUserMessageId,
+              baselineRevision,
+              startedAtMs,
+            });
+          }
+        }
         break;
       case "turn.interrupt":
         result = await rpc("turn/interrupt", { threadId: payload.threadId, turnId: payload.turnId });

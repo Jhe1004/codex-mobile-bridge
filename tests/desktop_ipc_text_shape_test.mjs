@@ -30,6 +30,8 @@ function consumeFrames(socket, onMessage) {
 const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-mobile-ipc-shape-"));
 const socketPath = path.join(tempDir, "ipc.sock");
 let capturedTurnStart = null;
+const followingStates = [];
+const protocolOrder = [];
 
 const server = net.createServer((socket) => {
   consumeFrames(socket, (message, peer) => {
@@ -52,13 +54,22 @@ const server = net.createServer((socket) => {
       return;
     }
     if (message.method === "thread-follower-start-turn") {
+      protocolOrder.push("start-turn");
       capturedTurnStart = message.params.turnStart;
+      const shouldFail = message.params.turnStart?.request?.input?.[0]?.text === "失败测试";
       peer.write(encodeFrame({
         type: "response",
         requestId: message.requestId,
-        resultType: "success",
-        result: { method: "thread-follower-start-turn", result: { ok: true } },
+        resultType: shouldFail ? "error" : "success",
+        ...(shouldFail
+          ? { error: "rejected-for-test" }
+          : { result: { method: "thread-follower-start-turn", result: { ok: true } } }),
       }));
+      return;
+    }
+    if (message.method === "thread-stream-following-changed") {
+      protocolOrder.push(message.params.following ? "follow" : "unfollow");
+      followingStates.push(message.params.following);
     }
   });
 });
@@ -71,12 +82,26 @@ await new Promise((resolve, reject) => {
 const client = new DesktopIpcClient({ socketPath, clientType: "shape-test" });
 try {
   await client.startTurn("01a13fe2-bb25-7143-b379-73a005c2ff38", "手机文本");
+  await client.setThreadFollowing("01a13fe2-bb25-7143-b379-73a005c2ff38", "desktop-owner", false);
+  await new Promise((resolve) => setTimeout(resolve, 25));
   assert.deepEqual(capturedTurnStart?.request?.input, [{
     type: "text",
     text: "手机文本",
     text_elements: [],
   }]);
-  console.log(JSON.stringify({ ok: true, input: capturedTurnStart.request.input }));
+  assert.deepEqual(followingStates, [true, false]);
+  assert.deepEqual(protocolOrder, ["follow", "start-turn", "unfollow"]);
+  await assert.rejects(
+    client.startTurn("01a13fe2-bb25-7143-b379-73a005c2ff38", "失败测试"),
+    /rejected-for-test/,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  assert.deepEqual(followingStates, [true, false, true, false]);
+  assert.deepEqual(protocolOrder, [
+    "follow", "start-turn", "unfollow",
+    "follow", "start-turn", "unfollow",
+  ]);
+  console.log(JSON.stringify({ ok: true, inputShape: true, followLifecycle: true }));
 } finally {
   client.close();
   await new Promise((resolve) => server.close(resolve));
