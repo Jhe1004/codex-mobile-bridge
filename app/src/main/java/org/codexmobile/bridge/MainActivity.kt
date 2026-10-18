@@ -31,6 +31,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -564,16 +565,18 @@ private fun MessageBubble(message: ChatMessage) {
         ) {
             Column {
                 if (tool) Text("工具 · ${message.detail}", style = MaterialTheme.typography.labelSmall, color = Muted)
-                MarkdownText(
-                    text = message.text,
-                    color = Ink,
-                    codeSurface = Color(0xFFF1F1F1),
-                    quoteSurface = Color(0xFFF7F7F7),
-                    onLink = { target ->
-                        if (target.startsWith("https://") || target.startsWith("http://")) uriHandler.openUri(target)
-                        else BridgeClient.downloadFile(target)
-                    },
-                )
+                SelectionContainer {
+                    MarkdownText(
+                        text = message.text,
+                        color = Ink,
+                        codeSurface = Color(0xFFF1F1F1),
+                        quoteSurface = Color(0xFFF7F7F7),
+                        onLink = { target ->
+                            if (target.startsWith("https://") || target.startsWith("http://")) uriHandler.openUri(target)
+                            else BridgeClient.downloadFile(target)
+                        },
+                    )
+                }
                 if (!tool && message.detail.isNotBlank()) Text(message.detail, style = MaterialTheme.typography.labelSmall, color = Muted, modifier = Modifier.padding(top = 6.dp))
             }
         }

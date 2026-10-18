@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.12.0 - 2026-10-19
+
+- Added native long-press text selection and system copy actions to every chat message.
+- Kept selection available across rendered Markdown paragraphs, lists, quotes, tables, and code blocks.
+- Preserved link opening, guarded local-file download, scrolling, and message rendering behavior.
+
 ## 0.11.1 - 2026-10-19
 
 - Restored secure connectivity to self-signed HTTPS tunnels through an optional per-user CA certificate in encrypted pairing data.

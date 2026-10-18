@@ -31,6 +31,8 @@ ignored `config/device-profile.json` records only non-secret compatibility data.
 - Keep touch targets at least 48 dp.
 - Preserve scroll position; opening a chat should land at its newest message
   without visibly animating through the entire history.
+- Keep chat Markdown inside a selection container so long-press selection,
+  drag handles, and the native copy menu remain available on every device.
 
 ## Validation matrix
 
