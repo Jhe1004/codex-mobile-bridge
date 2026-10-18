@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.app.Activity
 import android.graphics.Bitmap
 import android.net.Uri
+import android.widget.Toast
 import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.WindowManager
@@ -23,6 +24,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -45,6 +49,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.viewinterop.AndroidView
@@ -52,8 +57,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import kotlinx.coroutines.delay
-import java.io.ByteArrayInputStream
-import java.io.File
+import java.io.FileInputStream
 
 private const val LOCAL_HTML_HOST = "codex.local"
 private const val CHROME_AUTO_HIDE_MS = 4_000L
@@ -71,7 +75,9 @@ private fun WebView.setDocumentChromeVisible(visible: Boolean) {
             style.textContent = '.' + hiddenClass + '{display:none!important;}';
             document.head.appendChild(style);
           }
-          const targets = new Set(document.querySelectorAll('.topbar, .panel'));
+          const targets = new Set(document.querySelectorAll(
+            '.topbar, .masthead, .app-header, .page-header, header[role="banner"]'
+          ));
           Array.from(document.body.children).forEach(function (element) {
             const box = element.getBoundingClientRect();
             const position = getComputedStyle(element).position;
@@ -82,6 +88,18 @@ private fun WebView.setDocumentChromeVisible(visible: Boolean) {
           targets.forEach(function (element) {
             element.classList.toggle(hiddenClass, !$visibleLiteral);
           });
+          const activePanel = document.querySelector('[role="tabpanel"]:not([hidden])');
+          const workspace = activePanel && activePanel.parentElement;
+          if (workspace && workspace.getBoundingClientRect().height < 2) {
+            const top = workspace.getBoundingClientRect().top;
+            const available = Math.max(1, innerHeight - top);
+            document.documentElement.style.height = innerHeight + 'px';
+            document.body.style.height = innerHeight + 'px';
+            document.body.style.minHeight = innerHeight + 'px';
+            workspace.style.height = available + 'px';
+            workspace.style.minHeight = available + 'px';
+            workspace.style.flex = '0 0 ' + available + 'px';
+          }
         })();
         """.trimIndent(),
         null,
@@ -98,8 +116,12 @@ internal fun HtmlBrowserScreen(preview: FilePreview) {
     var progress by remember { mutableIntStateOf(0) }
     var chromeVisible by remember(preview.localPath) { mutableStateOf(false) }
     var chromeInteraction by remember(preview.localPath) { mutableLongStateOf(0L) }
+    var menuExpanded by remember(preview.localPath) { mutableStateOf(false) }
     val view = LocalView.current
+    val context = LocalContext.current
     val window = (view.context as? Activity)?.window
+    val mainDocumentPath = remember(preview.localPath) { "/${Uri.encode(preview.name)}" }
+    val mainDocumentUrl = remember(mainDocumentPath) { "https://$LOCAL_HTML_HOST$mainDocumentPath" }
 
     val revealChrome = {
         chromeVisible = true
@@ -191,6 +213,30 @@ internal fun HtmlBrowserScreen(preview: FilePreview) {
                             IconButton(onClick = { keepChromeAlive(); webView?.reload() }) {
                                 Icon(Icons.Default.Refresh, "刷新网页")
                             }
+                            IconButton(onClick = { keepChromeAlive(); menuExpanded = true }) {
+                                Icon(Icons.Default.MoreVert, "更多操作")
+                            }
+                            DropdownMenu(
+                                expanded = menuExpanded,
+                                onDismissRequest = { menuExpanded = false },
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("使用其他应用打开") },
+                                    onClick = {
+                                        menuExpanded = false
+                                        if (!openPreviewWithAnotherApp(context, preview)) {
+                                            Toast.makeText(context, "手机上没有可打开此文件的应用", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("重新从 Mac 下载") },
+                                    onClick = {
+                                        menuExpanded = false
+                                        BridgeClient.refreshFilePreview()
+                                    },
+                                )
+                            }
                         },
                         colors = TopAppBarDefaults.topAppBarColors(
                             containerColor = MaterialTheme.colorScheme.background,
@@ -230,6 +276,8 @@ internal fun HtmlBrowserScreen(preview: FilePreview) {
                     settings.setSupportZoom(true)
                     settings.builtInZoomControls = true
                     settings.displayZoomControls = false
+                    settings.cacheMode = WebSettings.LOAD_DEFAULT
+                    setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
                     webChromeClient = object : WebChromeClient() {
                         override fun onProgressChanged(view: WebView?, newProgress: Int) {
                             progress = newProgress
@@ -245,6 +293,7 @@ internal fun HtmlBrowserScreen(preview: FilePreview) {
 
                         override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                             if (!request.isForMainFrame || request.url.host != LOCAL_HTML_HOST) return false
+                            if (request.url.encodedPath == mainDocumentPath) return false
                             if (!request.url.fragment.isNullOrBlank() && request.url.encodedPath == Uri.parse(view.url).encodedPath) return false
                             val target = BridgeClient.resolveHtmlTarget(preview.sourcePath, request.url.encodedPath ?: "/", navigation = true)
                                 ?: return true
@@ -254,9 +303,12 @@ internal fun HtmlBrowserScreen(preview: FilePreview) {
 
                         override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest): WebResourceResponse? {
                             if (request.url.host != LOCAL_HTML_HOST) return null
+                            if (request.url.encodedPath == mainDocumentPath) {
+                                return WebResourceResponse("text/html", "UTF-8", FileInputStream(preview.localPath))
+                            }
                             val resource = BridgeClient.fetchHtmlResourceBlocking(preview.sourcePath, request.url.encodedPath ?: "/") ?: return null
                             val encoding = if (resource.mimeType.startsWith("text/") || resource.mimeType.contains("javascript") || resource.mimeType.contains("json")) "UTF-8" else null
-                            return WebResourceResponse(resource.mimeType, encoding, ByteArrayInputStream(resource.bytes))
+                            return WebResourceResponse(resource.mimeType, encoding, resource.bytes.inputStream())
                         }
 
                         private fun updateNavigation(view: WebView?) {
@@ -264,8 +316,7 @@ internal fun HtmlBrowserScreen(preview: FilePreview) {
                             canGoForward = view?.canGoForward() == true
                         }
                     }
-                    val html = File(preview.localPath).readText(Charsets.UTF_8)
-                    loadDataWithBaseURL("https://$LOCAL_HTML_HOST/", html, "text/html", "UTF-8", null)
+                    loadUrl(mainDocumentUrl)
                         webView = this
                     }
                 },

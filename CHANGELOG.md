@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.15.0 - 2026-10-19
+
+- Stream large local HTML files from verified on-device storage instead of copying the whole document into a WebView string.
+- Reuse previously verified file downloads across page opens and app restarts, with a bounded 512 MB cache.
+- Add an HTML reader menu for opening the downloaded file in another Android app or explicitly fetching a fresh copy from the Mac.
+
 ## 0.14.0 - 2026-10-19
 
 - Add a native macOS manager for relay, bridge, Codex, phone, and latency status.

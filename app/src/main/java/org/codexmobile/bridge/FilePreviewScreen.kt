@@ -1,10 +1,10 @@
 package org.codexmobile.bridge
 
-import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
@@ -41,7 +41,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -56,15 +55,9 @@ internal fun FilePreviewScreen(preview: FilePreview) {
     val context = LocalContext.current
     val file = remember(preview.localPath) { File(preview.localPath) }
     val openExternal: () -> Unit = {
-        runCatching {
-            val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", file)
-            val view = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, preview.mimeType)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-            context.startActivity(Intent.createChooser(view, "使用手机应用打开"))
+        if (!openPreviewWithAnotherApp(context, preview)) {
+            Toast.makeText(context, "手机上没有可打开此文件的应用", Toast.LENGTH_SHORT).show()
         }
-        Unit
     }
     BackHandler(onBack = BridgeClient::closeFilePreview)
     Scaffold(

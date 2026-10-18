@@ -266,9 +266,16 @@ object BridgeClient {
         }
     }
 
-    fun downloadFile(target: String) {
+    fun downloadFile(target: String, forceRefresh: Boolean = false) {
         val threadId = _state.value.selectedThread?.id ?: return
         if (_state.value.fileTransfer != null) return
+        val context = requireNotNull(appContext)
+        if (!forceRefresh) {
+            FilePreviewCache.find(context, threadId, target)?.let { cached ->
+                _state.value = _state.value.copy(filePreview = cached, error = null)
+                return
+            }
+        }
         val transferId = UUID.randomUUID().toString()
         activeTransferId = transferId
         _state.value = _state.value.copy(
@@ -287,21 +294,28 @@ object BridgeClient {
                 sha256 = result.getString("sha256"),
                 line = result.optInt("line").takeIf { result.has("line") && !result.isNull("line") },
             )
-            val context = requireNotNull(appContext)
-            val directory = File(context.cacheDir, "mobile_files").apply { mkdirs() }
-            val safeName = meta.name.replace(Regex("[^A-Za-z0-9._\\-\\u4e00-\\u9fff]"), "_").ifBlank { "download.bin" }
-            val destination = File(directory, "${meta.sha256.take(12)}-$safeName")
+            val directory = FilePreviewCache.directory(context)
+            val destination = File(directory, cacheFileName(meta.sha256, meta.name))
+            findVerifiedCachedFile(directory, destination, meta)?.let { cachedFile ->
+                publishFilePreview(threadId, target, meta, cachedFile)
+                return@request
+            }
             if (destination.exists()) destination.delete()
             destination.createNewFile()
             activeTransferFile = destination
             _state.value = _state.value.copy(fileTransfer = FileTransferState(meta.name, 0, meta.size))
-            if (meta.size == 0L) finishFileTransfer(transferId, meta, destination, MessageDigest.getInstance("SHA-256"))
+            if (meta.size == 0L) finishFileTransfer(transferId, threadId, target, meta, destination, MessageDigest.getInstance("SHA-256"))
             else fetchFileChunk(transferId, threadId, target, meta, destination, 0L, MessageDigest.getInstance("SHA-256"))
         }
     }
 
     fun closeFilePreview() {
         _state.value = _state.value.copy(filePreview = null)
+    }
+
+    fun refreshFilePreview() {
+        val preview = _state.value.filePreview ?: return
+        downloadFile(preview.sourcePath, forceRefresh = true)
     }
 
     /**
@@ -405,14 +419,21 @@ object BridgeClient {
             val nextOffset = result.getLong("nextOffset")
             _state.value = _state.value.copy(fileTransfer = FileTransferState(meta.name, nextOffset, meta.size))
             if (result.optBoolean("done") || nextOffset >= meta.size) {
-                finishFileTransfer(transferId, meta, destination, digest)
+                finishFileTransfer(transferId, threadId, target, meta, destination, digest)
             } else {
                 fetchFileChunk(transferId, threadId, target, meta, destination, nextOffset, digest)
             }
         }
     }
 
-    private fun finishFileTransfer(transferId: String, meta: FileMetadata, destination: File, digest: MessageDigest) {
+    private fun finishFileTransfer(
+        transferId: String,
+        threadId: String,
+        requestedTarget: String,
+        meta: FileMetadata,
+        destination: File,
+        digest: MessageDigest,
+    ) {
         if (activeTransferId != transferId) return
         val actualHash = digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
         if (!actualHash.equals(meta.sha256, ignoreCase = true) || destination.length() != meta.size) {
@@ -420,21 +441,51 @@ object BridgeClient {
             failFileTransfer(transferId, "文件完整性校验失败，请重新点击链接")
             return
         }
+        publishFilePreview(threadId, requestedTarget, meta, destination)
+    }
+
+    private fun publishFilePreview(
+        threadId: String,
+        requestedTarget: String,
+        meta: FileMetadata,
+        file: File,
+    ) {
         activeTransferId = null
         activeTransferFile = null
-        Log.i("CodexFileTransfer", "name=${meta.name} bytes=${meta.size} sha256Verified=true")
-        _state.value = _state.value.copy(
-            fileTransfer = null,
-            filePreview = FilePreview(
-                localPath = destination.absolutePath,
-                sourcePath = meta.sourcePath,
-                name = meta.name,
-                mimeType = meta.mimeType,
-                size = meta.size,
-                line = meta.line,
-            ),
-            error = null,
+        file.setLastModified(System.currentTimeMillis())
+        val preview = FilePreview(
+            localPath = file.absolutePath,
+            sourcePath = meta.sourcePath,
+            name = meta.name,
+            mimeType = meta.mimeType,
+            size = meta.size,
+            line = meta.line,
         )
+        appContext?.let { context ->
+            FilePreviewCache.store(context, threadId, requestedTarget, preview, meta.sha256, meta.mtimeMs)
+        }
+        Log.i("CodexFileTransfer", "name=${meta.name} bytes=${meta.size} cacheReady=true")
+        _state.value = _state.value.copy(fileTransfer = null, filePreview = preview, error = null)
+    }
+
+    private fun findVerifiedCachedFile(directory: File, destination: File, meta: FileMetadata): File? {
+        if (destination.isFile && destination.length() == meta.size) return destination
+        val safeSuffix = cacheFileName(meta.sha256, meta.name).substringAfter('-')
+        val legacy = File(directory, "${meta.sha256.take(12)}-$safeSuffix")
+        if (!legacy.isFile || legacy.length() != meta.size) return null
+        val digest = MessageDigest.getInstance("SHA-256")
+        legacy.inputStream().buffered().use { input ->
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                digest.update(buffer, 0, count)
+            }
+        }
+        val actualHash = digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
+        if (!actualHash.equals(meta.sha256, ignoreCase = true)) return null
+        if (destination.exists()) destination.delete()
+        return if (legacy.renameTo(destination)) destination else legacy
     }
 
     private fun failFileTransfer(transferId: String, message: String) {
