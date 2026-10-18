@@ -51,6 +51,9 @@ without publishing that user's secrets, paths, account data, or chat contents.
    official island capability, focus protocol, App ID, and permission checks.
    Never commit Xiaomi account data, OAIDs, signing fingerprints, or a user's
    private registration material, and preserve the 12-hour session limit.
+7. A private relay CA may enter only through ignored pairing data. Never commit
+   a user's tunnel certificate or endpoint, and never replace certificate
+   validation with an all-trusting TLS client.
 
 ## Configuration contract
 

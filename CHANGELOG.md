@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.1 - 2026-10-19
+
+- Restored secure connectivity to self-signed HTTPS tunnels through an optional per-user CA certificate in encrypted pairing data.
+- Kept private tunnel certificates and endpoints out of the repository and APK source.
+- Preserved normal Android system trust when no private CA is configured.
+
 ## 0.11.0 - 2026-10-19
 
 - Added an optional Xiaomi HyperOS 4 Super Island view for active Codex chats.

@@ -33,6 +33,16 @@ This creates two different 256-bit random tokens. Both are stored in macOS
 Keychain. The Android token is also written to the ignored file
 `config/pairing.json` for USB provisioning.
 
+If the tunnel uses a private or self-signed certificate, provide the exact CA
+certificate during this step:
+
+```bash
+./scripts/generate_pairing.sh https://your-host/v1/ws /private/path/relay-ca.crt
+```
+
+The certificate stays in ignored pairing data and is encrypted on the phone.
+Do not work around certificate errors by disabling HTTPS verification.
+
 ## 4. Configure file access
 
 By default, a chat can read files inside its project roots. To permit additional

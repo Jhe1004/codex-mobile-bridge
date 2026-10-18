@@ -7,6 +7,8 @@
 /artifacts/
 /config/pairing.json
 /config/device-profile.json
+/config/*.crt
+/config/*.cer
 /.env
 *.jks
 *.keystore

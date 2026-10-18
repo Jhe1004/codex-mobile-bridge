@@ -26,15 +26,21 @@ import okhttp3.WebSocketListener
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayInputStream
 import java.security.MessageDigest
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.file.Paths
+import java.security.KeyStore
+import java.security.cert.CertificateFactory
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import javax.net.ssl.SSLContext
+import javax.net.ssl.TrustManagerFactory
+import javax.net.ssl.X509TrustManager
 
 object BridgeClient {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -439,10 +445,17 @@ object BridgeClient {
     private fun connectOnce() {
         val context = requireNotNull(appContext)
         val pairing = PairingStore.load(context) ?: error("设备尚未配对，请先通过 USB 完成一次安全配对")
-        val http = OkHttpClient.Builder()
+        val httpBuilder = OkHttpClient.Builder()
             .readTimeout(0, TimeUnit.MILLISECONDS)
             .pingInterval(20, TimeUnit.SECONDS)
-            .build()
+        pairing.relayCaCertificatePem?.let { certificatePem ->
+            val trustManager = pinnedRelayTrustManager(certificatePem)
+            val sslContext = SSLContext.getInstance("TLS").apply {
+                init(null, arrayOf(trustManager), null)
+            }
+            httpBuilder.sslSocketFactory(sslContext.socketFactory, trustManager)
+        }
+        val http = httpBuilder.build()
         val normalizedRelayUrl = pairing.relayUrl
             .replaceFirst(Regex("^wss://", RegexOption.IGNORE_CASE), "https://")
             .replaceFirst(Regex("^ws://", RegexOption.IGNORE_CASE), "http://")
@@ -478,6 +491,20 @@ object BridgeClient {
             }
             }
         )
+    }
+
+    private fun pinnedRelayTrustManager(certificatePem: String): X509TrustManager {
+        val certificate = ByteArrayInputStream(certificatePem.toByteArray(Charsets.UTF_8)).use { input ->
+            CertificateFactory.getInstance("X.509").generateCertificate(input)
+        }
+        val keyStore = KeyStore.getInstance(KeyStore.getDefaultType()).apply {
+            load(null, null)
+            setCertificateEntry("codex-mobile-relay", certificate)
+        }
+        val factory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm()).apply {
+            init(keyStore)
+        }
+        return factory.trustManagers.filterIsInstance<X509TrustManager>().single()
     }
 
     private fun closeTransport() {

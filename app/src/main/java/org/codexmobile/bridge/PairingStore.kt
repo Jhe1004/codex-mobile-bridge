@@ -15,7 +15,22 @@ import javax.crypto.spec.GCMParameterSpec
 data class PairingCredentials(
     val relayUrl: String,
     val relayToken: String,
+    val relayCaCertificatePem: String? = null,
 )
+
+internal fun decodePairingCredentials(raw: String): PairingCredentials {
+    val json = JSONObject(raw)
+    val relayUrl = json.optString("relayUrl", BuildConfig.RELAY_URL).trim()
+    require(relayUrl.startsWith("http://") || relayUrl.startsWith("https://") ||
+        relayUrl.startsWith("ws://") || relayUrl.startsWith("wss://")) {
+        "relayUrl must use http, https, ws, or wss"
+    }
+    return PairingCredentials(
+        relayUrl = relayUrl,
+        relayToken = json.getString("relayToken"),
+        relayCaCertificatePem = json.optString("relayCaCertificatePem").trim().ifBlank { null },
+    )
+}
 
 object PairingStore {
     private const val ALIAS = "codex_mobile_pairing_v1"
@@ -26,14 +41,14 @@ object PairingStore {
     fun load(context: Context): PairingCredentials? {
         importPending(context)
         val encoded = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(ENTRY, null) ?: return null
-        return runCatching { decode(decrypt(encoded)) }.getOrNull()
+        return runCatching { decodePairingCredentials(decrypt(encoded)) }.getOrNull()
     }
 
     private fun importPending(context: Context) {
         val file = context.filesDir.resolve(PENDING_FILE)
         if (!file.exists()) return
         val raw = file.readText(StandardCharsets.UTF_8)
-        val parsed = decode(raw)
+        val parsed = decodePairingCredentials(raw)
         require(parsed.relayToken.length >= 32)
         val saved = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit()
@@ -41,16 +56,6 @@ object PairingStore {
             .commit()
         check(saved) { "安全配对数据保存失败" }
         check(file.delete()) { "配对数据已加密保存，但临时文件删除失败" }
-    }
-
-    private fun decode(raw: String): PairingCredentials {
-        val json = JSONObject(raw)
-        val relayUrl = json.optString("relayUrl", BuildConfig.RELAY_URL).trim()
-        require(relayUrl.startsWith("http://") || relayUrl.startsWith("https://") ||
-            relayUrl.startsWith("ws://") || relayUrl.startsWith("wss://")) {
-            "relayUrl must use http, https, ws, or wss"
-        }
-        return PairingCredentials(relayUrl, json.getString("relayToken"))
     }
 
     private fun key(): SecretKey {

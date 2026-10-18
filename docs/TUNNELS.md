@@ -8,7 +8,9 @@ WebSocket upgrades and forwards these paths to `127.0.0.1:18880`:
 
 ## Requirements
 
-- Public traffic uses HTTPS/WSS with a certificate trusted by Android.
+- Public traffic uses HTTPS/WSS. Prefer a publicly trusted certificate. If the
+  tunnel uses a private or self-signed certificate, provision that exact CA
+  certificate through the ignored pairing file; never disable TLS validation.
 - `Authorization` headers reach the relay unchanged.
 - Idle WebSockets remain open for at least 60 seconds.
 - Request bodies up to 8 MiB are allowed unless `RELAY_MAX_PAYLOAD` is reduced.
@@ -17,6 +19,19 @@ WebSocket upgrades and forwards these paths to `127.0.0.1:18880`:
 FRP/SakuraFrp, Cloudflare Tunnel, Tailscale, nginx, Caddy, and SSH reverse
 tunnels can all satisfy this contract. Keep provider credentials outside this
 repository and outside shell history when possible.
+
+## Private or self-signed certificate
+
+Pass the CA certificate as the second argument when generating pairing data:
+
+```bash
+./scripts/generate_pairing.sh https://your-host/v1/ws /private/path/relay-ca.crt
+```
+
+The certificate is stored only in ignored `config/pairing.json`, transferred by
+USB, and encrypted with Android Keystore. The Android client then trusts that
+certificate for this relay connection only. It does not install a system CA and
+does not accept arbitrary certificates.
 
 ## LAN development
 
