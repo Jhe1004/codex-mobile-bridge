@@ -9,3 +9,4 @@
 - Adaptive icon safe zone for vendor launcher masks.
 - Provider-neutral relay URL and per-user encrypted pairing.
 - Sanitized setup, device inspection, CI, and AI-agent instructions.
+- Stable Android API 36 build baseline with support back to API 28.

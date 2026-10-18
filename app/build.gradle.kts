@@ -5,12 +5,12 @@ plugins {
 
 android {
     namespace = "org.codexmobile.bridge"
-    compileSdk = 37
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "org.codexmobile.bridge"
         minSdk = 28
-        targetSdk = 37
+        targetSdk = 36
         versionCode = 24
         versionName = "0.10.1"
 
