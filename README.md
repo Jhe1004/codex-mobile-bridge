@@ -30,6 +30,7 @@ Codex Desktop / codex app-server
 - **同步桌面端项目与会话**：直接读取 Mac 上 Codex Desktop 的项目目录层级与会话列表，手机端与桌面端视图保持一致。
 - **无缝接力对话**：在手机上直接向现有会话发送消息；发送完成后会自动将控制权交还给桌面端，切回 Mac 继续操作时不会出现会话占用或冲突。
 - **连接状态与心跳检测**：实时展示手机、中继服务与当前会话的连接状态，支持断线重连与手动刷新。
+- **小米澎湃 OS 4 超级岛（可选）**：进入会话后，可在超级岛持续看到待命、生成中、待确认、传输、完成或断线状态；其他系统默认关闭。此能力需要按小米官方流程登记应用并申请场景权限。
 - **Markdown 与沉浸式 HTML 阅读器**：对话内容原生支持 Markdown 渲染；针对 Codex 生成的 HTML 报告或单页应用，内置全屏沉浸式阅读器。
 - **本地文件安全预览**：点击对话中引用的 Mac 本地文件路径，即可在手机上拉取并预览内容（支持大文件分块传输，且严格限制在项目目录与白名单目录内）。
 - **多尺寸屏幕适配**：基于 Jetpack Compose 构建，适配主流手机、折叠屏与平板布局。
@@ -95,6 +96,7 @@ npm --prefix local_relay run test:integration
 - [隧道与反向代理指南](docs/TUNNELS.md)：WebSocket 转发要求与穿透配置说明
 - [兼容性说明](docs/COMPATIBILITY.md)：Mac 端依赖的 Codex 本地接口说明与升级检查清单
 - [设备与界面适配说明](docs/DEVICE_PROFILES.md)：不同屏幕形态、系统栏内边距及电池后台策略说明
+- [澎湃 OS 4 超级岛接入](docs/HYPEROS_SUPER_ISLAND.md)：系统检测、开发者平台登记、App ID、测试白名单与合规边界
 - [AI Agent 协作指南](AGENTS.md)：供 Codex、Claude Code 等编程 Agent 参考的仓库结构与测试规范
 
 ## 许可证

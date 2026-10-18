@@ -61,6 +61,7 @@ data class BridgeUiState(
     val messages: List<ChatMessage> = emptyList(),
     val streamingText: String = "",
     val activeTurnId: String? = null,
+    val lastTurnCompletedAtMs: Long? = null,
     val sendPending: Boolean = false,
     val approval: PendingApproval? = null,
     val fileTransfer: FileTransferState? = null,

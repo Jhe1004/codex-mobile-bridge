@@ -3,6 +3,9 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val xiaomiSuperIslandAppId = providers.gradleProperty("xiaomiSuperIslandAppId").getOrElse("")
+val escapedXiaomiSuperIslandAppId = xiaomiSuperIslandAppId.replace("\\", "\\\\").replace("\"", "\\\"")
+
 android {
     namespace = "org.codexmobile.bridge"
     compileSdk = 36
@@ -11,13 +14,23 @@ android {
         applicationId = "org.codexmobile.bridge"
         minSdk = 28
         targetSdk = 36
-        versionCode = 24
-        versionName = "0.10.1"
+        versionCode = 25
+        versionName = "0.11.0"
+
+        manifestPlaceholders["xiaomiSuperIslandAppId"] = xiaomiSuperIslandAppId
+        manifestPlaceholders["xiaomiSuperIslandDebug"] = "true"
+        buildConfigField("String", "XIAOMI_SUPER_ISLAND_APP_ID", "\"$escapedXiaomiSuperIslandAppId\"")
 
         val relayUrl = providers.gradleProperty("relayUrl")
             .orElse(providers.environmentVariable("CODEX_MOBILE_RELAY_URL"))
             .getOrElse("http://10.0.2.2:18880/v1/ws")
         buildConfigField("String", "RELAY_URL", "\"${relayUrl.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
+    }
+
+    buildTypes {
+        getByName("release") {
+            manifestPlaceholders["xiaomiSuperIslandDebug"] = "false"
+        }
     }
 
     buildFeatures {

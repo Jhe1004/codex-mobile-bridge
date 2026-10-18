@@ -8,9 +8,11 @@ import android.os.Build
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import androidx.lifecycle.LifecycleService
+import androidx.lifecycle.lifecycleScope
 
 class BridgeService : LifecycleService() {
     private var wakeLock: PowerManager.WakeLock? = null
+    private var superIslandController: HyperOs4SuperIslandController? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -28,7 +30,7 @@ class BridgeService : LifecycleService() {
         val intent = Intent(this, MainActivity::class.java)
         val pendingIntent = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val notification = NotificationCompat.Builder(this, channelId)
-            .setSmallIcon(android.R.drawable.stat_sys_upload_done)
+            .setSmallIcon(R.drawable.ic_stat_codex)
             .setContentTitle("Codex Mobile 正在连接")
             .setContentText("保持与 Mac Codex 的实时通道")
             .setOngoing(true)
@@ -36,9 +38,12 @@ class BridgeService : LifecycleService() {
             .build()
         startForeground(2001, notification)
         BridgeClient.start(this)
+        superIslandController = HyperOs4SuperIslandController(this, lifecycleScope).also { it.start() }
     }
 
     override fun onDestroy() {
+        superIslandController?.stop()
+        superIslandController = null
         BridgeClient.stop()
         wakeLock?.takeIf { it.isHeld }?.release()
         wakeLock = null

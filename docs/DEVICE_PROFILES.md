@@ -23,7 +23,10 @@ ignored `config/device-profile.json` records only non-secret compatibility data.
 
 - Use `WindowInsets` and `adjustResize` for the input bar.
 - Use adaptive icons and keep important art inside the central safe zone.
-- Use capability/API checks instead of manufacturer or serial-number branches.
+- Use capability/API checks instead of model or serial-number branches. A
+  manufacturer check is allowed only as part of a documented vendor-only API
+  gate, such as Xiaomi HyperOS 4 Super Island, and must be combined with the
+  vendor's runtime capability and permission checks.
 - Treat keyboard, fold state, and orientation as runtime state.
 - Keep touch targets at least 48 dp.
 - Preserve scroll position; opening a chat should land at its newest message

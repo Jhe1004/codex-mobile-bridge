@@ -47,6 +47,10 @@ without publishing that user's secrets, paths, account data, or chat contents.
    proxies are deployment choices, not source-code dependencies.
 5. Do not claim Codex compatibility without running the offline gates and one
    redacted end-to-end test on the target Codex version.
+6. Keep Super Island strictly gated to Xiaomi-family HyperOS 4 devices with the
+   official island capability, focus protocol, App ID, and permission checks.
+   Never commit Xiaomi account data, OAIDs, signing fingerprints, or a user's
+   private registration material, and preserve the 12-hour session limit.
 
 ## Configuration contract
 

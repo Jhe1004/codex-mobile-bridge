@@ -26,3 +26,14 @@ changed through the `DesktopIpcClient` constructor in tests or code.
 8. Preview one explicit, non-sensitive test file.
 
 Do not use arbitrary user files or real private chats as public test fixtures.
+
+## Xiaomi HyperOS 4 Super Island
+
+The optional Super Island integration is enabled only when all of these checks
+pass at runtime: Xiaomi-family manufacturer, `OS4` system version, island
+feature flag, focus-notification protocol 3 or newer, configured Xiaomi App ID,
+and granted focus-notification permission. Failure of any check leaves the
+feature off without changing normal chat or connection behavior.
+
+See [HYPEROS_SUPER_ISLAND.md](HYPEROS_SUPER_ISLAND.md) for registration and
+testing requirements. Never use a device model or serial number as the gate.

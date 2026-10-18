@@ -105,6 +105,7 @@ object BridgeClient {
             selectedThread = thread,
             messages = emptyList(),
             streamingText = "",
+            lastTurnCompletedAtMs = null,
             sendPending = false,
             preparingThreadId = thread.id,
             preparedThreadId = null,
@@ -161,6 +162,7 @@ object BridgeClient {
             messages = emptyList(),
             streamingText = "",
             activeTurnId = null,
+            lastTurnCompletedAtMs = null,
             sendPending = false,
             preparingThreadId = null,
             preparedThreadId = null,
@@ -181,7 +183,12 @@ object BridgeClient {
         val thread = _state.value.selectedThread ?: return
         val trimmed = text.trim()
         if (trimmed.isBlank() || _state.value.sendPending || _state.value.activeTurnId != null) return
-        _state.value = _state.value.copy(sendPending = true, streamingText = "", error = null)
+        _state.value = _state.value.copy(
+            sendPending = true,
+            streamingText = "",
+            lastTurnCompletedAtMs = null,
+            error = null,
+        )
         request(
             "turn.start",
             JSONObject().put("threadId", thread.id).put("text", trimmed),
@@ -555,7 +562,10 @@ object BridgeClient {
         val selectedId = _state.value.selectedThread?.id
         when (event) {
             "turn/started" -> if (data.optString("threadId") == selectedId) {
-                _state.value = _state.value.copy(activeTurnId = data.optJSONObject("turn")?.optString("id"))
+                _state.value = _state.value.copy(
+                    activeTurnId = data.optJSONObject("turn")?.optString("id"),
+                    lastTurnCompletedAtMs = null,
+                )
             }
             "item/agentMessage/delta" -> if (data.optString("threadId") == selectedId) {
                 _state.value = _state.value.copy(streamingText = _state.value.streamingText + data.optString("delta"))
@@ -574,7 +584,12 @@ object BridgeClient {
                 }
             }
             "turn/completed" -> if (data.optString("threadId") == selectedId) {
-                _state.value = _state.value.copy(activeTurnId = null, streamingText = "", sendPending = false)
+                _state.value = _state.value.copy(
+                    activeTurnId = null,
+                    streamingText = "",
+                    sendPending = false,
+                    lastTurnCompletedAtMs = System.currentTimeMillis(),
+                )
                 notifyCompleted()
                 refreshThreads()
                 refreshSelectedThread()
