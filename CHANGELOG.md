@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.14.0 - 2026-10-19
+
+- Add a native macOS manager for relay, bridge, Codex, phone, and latency status.
+- Add per-service and batch start, stop, and restart controls backed by user LaunchAgents.
+- Install the manager by default from `bootstrap_macos.sh`, with an explicit opt-out.
+- Keep the tunnel provider-neutral through an optional standard LaunchAgent label.
+- Include the project-membership and compaction-message consistency fixes in the public source tree.
+
+## 0.13.1 - 2026-10-19
+
+- Keep a newly sent user message visible while Codex compacts a long conversation.
+- Merge server history with the pending local message by `clientUserMessageId` instead of replacing the whole chat.
+- Remove the optimistic message only when delivery fails, while preserving the text in the composer for retry.
+
 ## 0.13.0 - 2026-10-19
 
 - Added live per-conversation Running, New Reply, and Idle indicators to the Android home screen.

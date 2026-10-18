@@ -30,6 +30,7 @@ Codex Desktop / codex app-server
 - **同步桌面端项目与会话**：直接读取 Mac 上 Codex Desktop 的项目目录层级与会话列表，手机端与桌面端视图保持一致。
 - **无缝接力对话**：在手机上直接向现有会话发送消息；发送完成后会自动将控制权交还给桌面端，切回 Mac 继续操作时不会出现会话占用或冲突。
 - **连接状态与心跳检测**：实时展示手机、中继服务与当前会话的连接状态，支持断线重连与手动刷新。
+- **原生 Mac 管理器**：默认安装“Codex 手机桥接”控制中心，可查看本地中继、Mac 桥接、Codex 与手机连接状态，并启动、停止或重启后台服务。
 - **小米澎湃 OS 4 超级岛（可选）**：进入会话后，可在超级岛持续看到待命、生成中、待确认、传输、完成或断线状态；其他系统默认关闭。此能力需要按小米官方流程登记应用并申请场景权限。
 - **Markdown 与沉浸式 HTML 阅读器**：对话内容原生支持 Markdown 渲染；针对 Codex 生成的 HTML 报告或单页应用，内置全屏沉浸式阅读器。
 - **会话文字选择与复制**：长按任意用户消息或 Codex 回复即可拖动选区并调用系统复制，方便摘取句子继续追问。
@@ -58,7 +59,7 @@ cd codex-mobile-bridge
 # 2. 生成配对密钥与配置（将地址替换为你自己的 HTTPS/WSS 公网地址，需转发至本机 127.0.0.1:18880）
 ./scripts/generate_pairing.sh https://bridge.example.com/v1/ws
 
-# 3. 安装依赖并启动 Mac 后台服务（LaunchAgents）
+# 3. 安装依赖、启动 Mac 后台服务，并安装原生管理器
 ./scripts/bootstrap_macos.sh
 
 # 4. 手机开启 USB 调试并连接电脑，编译安装 App 并自动导入配对信息
@@ -67,6 +68,8 @@ cd codex-mobile-bridge
 ```
 
 **局域网测试说明**：如果仅在家庭或实验室等可信局域网内测试，可直接使用 Mac 的局域网 IP（例如 `http://192.168.1.20:18880/v1/ws`），并在启动中继时设置 `RELAY_HOST=0.0.0.0`。通过公网访问时请务必启用 TLS（HTTPS/WSS），并保持本地中继仅监听 `127.0.0.1`。
+
+安装完成后，可从 `~/Applications/Codex 手机桥接.app` 打开管理器。它会显示真实连接状态、手机在线数量和本地延迟，也可以管理后台服务。若只想安装服务而不安装管理器，可执行 `INSTALL_MACOS_MANAGER=0 ./scripts/bootstrap_macos.sh`。
 
 如需卸载 Mac 端的后台自启服务，可随时运行：
 
@@ -82,9 +85,10 @@ npm --prefix mac_bridge install
 npm test
 npm --prefix local_relay run test:integration
 ./gradlew :app:testDebugUnitTest :app:assembleDebug
+./macos_manager/scripts/build_app.sh
 ```
 
-编译生成的调试 APK 位于 `app/build/outputs/apk/debug/app-debug.apk`。每次提交或推送时，GitHub Actions 也会自动运行测试并构建 APK 产物。
+编译生成的调试 APK 位于 `app/build/outputs/apk/debug/app-debug.apk`，Mac 管理器位于 `macos_manager/artifacts/`。每次提交或推送时，GitHub Actions 也会自动验证两端构建。
 
 ## 安全机制
 
@@ -95,6 +99,7 @@ npm --prefix local_relay run test:integration
 ## 相关文档
 
 - [安装指南](docs/INSTALL.md)：完整的环境准备、密钥生成、文件目录授权与服务管理步骤
+- [Mac 管理器](macos_manager/README.md)：原生状态面板、服务控制和独立构建说明
 - [隧道与反向代理指南](docs/TUNNELS.md)：WebSocket 转发要求与穿透配置说明
 - [兼容性说明](docs/COMPATIBILITY.md)：Mac 端依赖的 Codex 本地接口说明与升级检查清单
 - [设备与界面适配说明](docs/DEVICE_PROFILES.md)：不同屏幕形态、系统栏内边距及电池后台策略说明

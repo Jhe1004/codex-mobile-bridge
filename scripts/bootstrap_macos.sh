@@ -25,5 +25,12 @@ for label in org.codexmobile.bridge.relay org.codexmobile.bridge.mac; do
   launchctl kickstart -k "gui/$(id -u)/$label"
 done
 
+if [[ "${INSTALL_MACOS_MANAGER:-1}" = "1" ]]; then
+  "$ROOT/macos_manager/scripts/install_app.sh"
+fi
+
 echo "Mac relay and bridge services are running."
+if [[ "${INSTALL_MACOS_MANAGER:-1}" = "1" ]]; then
+  echo "Manager app: $HOME/Applications/Codex 手机桥接.app"
+fi
 echo "Logs: $LOG_DIR"

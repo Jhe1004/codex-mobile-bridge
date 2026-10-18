@@ -42,7 +42,37 @@ data class ChatMessage(
     val role: String,
     val text: String,
     val detail: String = "",
+    val clientId: String = "",
 )
+
+data class PendingOutgoingMessage(
+    val threadId: String,
+    val message: ChatMessage,
+)
+
+data class MessageMergeResult(
+    val messages: List<ChatMessage>,
+    val pendingOutgoing: PendingOutgoingMessage?,
+)
+
+internal fun mergeServerMessages(
+    threadId: String,
+    serverMessages: List<ChatMessage>,
+    pendingOutgoing: PendingOutgoingMessage?,
+): MessageMergeResult {
+    val pending = pendingOutgoing?.takeIf { it.threadId == threadId }
+        ?: return MessageMergeResult(serverMessages, pendingOutgoing)
+    val acknowledged = serverMessages.any { message ->
+        message.role == "user" &&
+            message.clientId.isNotBlank() &&
+            message.clientId == pending.message.clientId
+    }
+    return if (acknowledged) {
+        MessageMergeResult(serverMessages, null)
+    } else {
+        MessageMergeResult(serverMessages + pending.message, pending)
+    }
+}
 
 data class PendingApproval(
     val id: Any,
@@ -79,6 +109,7 @@ data class BridgeUiState(
     val preparingThreadId: String? = null,
     val preparedThreadId: String? = null,
     val messages: List<ChatMessage> = emptyList(),
+    val pendingOutgoing: PendingOutgoingMessage? = null,
     val streamingText: String = "",
     val activeTurnId: String? = null,
     val lastTurnCompletedAtMs: Long? = null,

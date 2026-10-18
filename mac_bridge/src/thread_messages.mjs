@@ -17,6 +17,7 @@ export function visibleMessagesFromEntries(entries = []) {
     if (!text.trim()) return [];
     return [{
       id: String(item.id || `${entry.turnId || "turn"}-${entry.startedAtMs || 0}`),
+      clientId: item.type === "userMessage" ? String(item.clientId ?? "") : "",
       role: item.type === "userMessage" ? "user" : "assistant",
       text: text.slice(0, MAX_TEXT_CHARACTERS),
       truncated: text.length > MAX_TEXT_CHARACTERS,

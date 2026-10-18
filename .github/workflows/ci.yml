@@ -46,3 +46,14 @@ jobs:
         with:
           name: codex-mobile-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
+
+  macos-manager:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build native manager
+        run: ./macos_manager/scripts/build_app.sh
+      - name: Verify application bundle
+        run: |
+          codesign --verify --deep --strict --verbose=2 "macos_manager/artifacts/Codex 手机桥接.app"
+          plutil -lint "macos_manager/artifacts/Codex 手机桥接.app/Contents/Info.plist"

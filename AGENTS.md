@@ -12,6 +12,7 @@ without publishing that user's secrets, paths, account data, or chat contents.
 - `app/`: Kotlin/Jetpack Compose Android client.
 - `local_relay/`: authenticated WebSocket router. It must not read Codex data.
 - `mac_bridge/`: Codex app-server/Desktop IPC adapter and guarded file reader.
+- `macos_manager/`: native macOS status panel and LaunchAgent controls.
 - `scripts/`: reproducible setup, pairing, diagnostics, and tests.
 - `tests/`: offline Node tests. Tests must use fixtures or temporary folders.
 - `config/`: examples only. Real generated files are ignored.
@@ -76,6 +77,7 @@ npm --prefix mac_bridge install
 npm test
 npm --prefix local_relay run test:integration
 ./gradlew :app:testDebugUnitTest :app:assembleDebug
+./macos_manager/scripts/build_app.sh
 ```
 
 For an Android change, also run `scripts/inspect_device.sh` and verify on at

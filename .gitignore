@@ -5,6 +5,7 @@
 /**/build/
 /**/node_modules/
 /artifacts/
+/macos_manager/artifacts/
 /config/pairing.json
 /config/device-profile.json
 /config/*.crt

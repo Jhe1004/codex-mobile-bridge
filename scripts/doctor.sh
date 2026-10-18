@@ -21,6 +21,7 @@ check "Java 17+" zsh -c 'java -version 2>&1 | head -1 | grep -Eq "(17|18|19|2[0-
 check "Gradle wrapper" test -x "$ROOT/gradlew"
 check "Android adb" zsh -c 'command -v adb >/dev/null || test -x "$HOME/Library/Android/sdk/platform-tools/adb"'
 check "OpenSSL" command -v openssl
+check "Clang (macOS manager)" command -v clang
 check "Codex CLI or Desktop bundle" zsh -c 'command -v codex >/dev/null || test -x "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"'
 
 if (( failures > 0 )); then

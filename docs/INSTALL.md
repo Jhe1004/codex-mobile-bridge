@@ -60,8 +60,16 @@ Do not use `$HOME` as a broad file root unless that is deliberately required.
 ./scripts/bootstrap_macos.sh
 ```
 
-The script installs Node dependencies and creates two user LaunchAgents. Logs
-are written to `~/Library/Logs/CodexMobileBridge/`.
+The script installs Node dependencies, creates two user LaunchAgents, and builds
+the native manager into `~/Applications/Codex 手机桥接.app`. Logs are written to
+`~/Library/Logs/CodexMobileBridge/`.
+
+Open the manager to inspect relay, bridge, Codex, and phone connectivity or to
+start, stop, and restart the services. To skip the manager installation:
+
+```bash
+INSTALL_MACOS_MANAGER=0 ./scripts/bootstrap_macos.sh
+```
 
 Health check:
 

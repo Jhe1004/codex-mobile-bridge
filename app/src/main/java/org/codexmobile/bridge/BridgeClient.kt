@@ -115,6 +115,7 @@ object BridgeClient {
             threads = _state.value.threads.map { if (it.id == thread.id) selected else it },
             selectedThread = selected,
             messages = emptyList(),
+            pendingOutgoing = null,
             streamingText = "",
             lastTurnCompletedAtMs = null,
             sendPending = false,
@@ -171,6 +172,7 @@ object BridgeClient {
         _state.value = _state.value.copy(
             selectedThread = null,
             messages = emptyList(),
+            pendingOutgoing = null,
             streamingText = "",
             activeTurnId = null,
             lastTurnCompletedAtMs = null,
@@ -185,7 +187,11 @@ object BridgeClient {
         request("thread.start", JSONObject().put("ephemeral", false).put("cwd", project.rootPath)) { result ->
             val thread = result.optJSONObject("thread") ?: return@request
             val summary = threadSummary(thread, project.id)
-            _state.value = _state.value.copy(selectedThread = summary, messages = emptyList())
+            _state.value = _state.value.copy(
+                selectedThread = summary,
+                messages = emptyList(),
+                pendingOutgoing = null,
+            )
             refreshThreads()
         }
     }
@@ -194,7 +200,17 @@ object BridgeClient {
         val thread = _state.value.selectedThread ?: return
         val trimmed = text.trim()
         if (trimmed.isBlank() || _state.value.sendPending || _state.value.activeTurnId != null) return
+        val clientUserMessageId = UUID.randomUUID().toString()
+        val optimisticMessage = ChatMessage(
+            id = "local-$clientUserMessageId",
+            role = "user",
+            text = trimmed,
+            detail = "正在发送…",
+            clientId = clientUserMessageId,
+        )
         _state.value = _state.value.copy(
+            messages = _state.value.messages + optimisticMessage,
+            pendingOutgoing = PendingOutgoingMessage(thread.id, optimisticMessage),
             sendPending = true,
             streamingText = "",
             lastTurnCompletedAtMs = null,
@@ -202,16 +218,31 @@ object BridgeClient {
         )
         request(
             "turn.start",
-            JSONObject().put("threadId", thread.id).put("text", trimmed),
+            JSONObject()
+                .put("threadId", thread.id)
+                .put("text", trimmed)
+                .put("clientUserMessageId", clientUserMessageId),
             onError = { message ->
-                _state.value = _state.value.copy(sendPending = false, error = message)
+                val current = _state.value
+                _state.value = current.copy(
+                    messages = current.messages.filterNot { it.clientId == clientUserMessageId },
+                    pendingOutgoing = current.pendingOutgoing?.takeUnless {
+                        it.message.clientId == clientUserMessageId
+                    },
+                    sendPending = false,
+                    error = message,
+                )
             },
         ) { result ->
             val turnId = result.optJSONObject("turn")?.optString("id").orEmpty()
-            val user = ChatMessage(UUID.randomUUID().toString(), "user", trimmed)
-            _state.value = _state.value.copy(
-                messages = _state.value.messages + user,
-                activeTurnId = turnId.ifBlank { null },
+            val current = _state.value
+            val acceptedMessage = optimisticMessage.copy(detail = "")
+            _state.value = current.copy(
+                messages = current.messages.map { message ->
+                    if (message.clientId == clientUserMessageId) acceptedMessage else message
+                },
+                pendingOutgoing = PendingOutgoingMessage(thread.id, acceptedMessage),
+                activeTurnId = turnId.ifBlank { current.activeTurnId },
                 sendPending = false,
                 preparingThreadId = null,
                 preparedThreadId = thread.id,
@@ -518,7 +549,16 @@ object BridgeClient {
         pending.clear()
         pendingErrors.clear()
         if (_state.value.sendPending) {
-            _state.value = _state.value.copy(sendPending = false, error = "连接中断，消息尚未发送，请重试")
+            val current = _state.value
+            val pendingOutgoing = current.pendingOutgoing
+            _state.value = current.copy(
+                messages = if (pendingOutgoing == null) current.messages else {
+                    current.messages.filterNot { it.clientId == pendingOutgoing.message.clientId }
+                },
+                pendingOutgoing = null,
+                sendPending = false,
+                error = "连接中断，消息尚未发送，请重试",
+            )
         }
         if (activeTransferId != null) {
             activeTransferId = null
@@ -826,11 +866,16 @@ object BridgeClient {
                         role = item.optString("role", "assistant"),
                         text = text,
                         detail = if (item.optBoolean("truncated")) "内容过长，已截取" else "",
+                        clientId = item.optString("clientId"),
                     )
                 )
             }
         }
-        _state.value = _state.value.copy(messages = messages)
+        val merged = mergeServerMessages(requestedThreadId, messages, _state.value.pendingOutgoing)
+        _state.value = _state.value.copy(
+            messages = merged.messages,
+            pendingOutgoing = merged.pendingOutgoing,
+        )
     }
 
     private fun userText(item: JSONObject): String {

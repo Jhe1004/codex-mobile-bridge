@@ -20,6 +20,7 @@ export function readProjectCatalog(path) {
   return {
     projects,
     assignments: state["thread-project-assignments"] ?? {},
+    projectlessThreadIds: new Set(state["projectless-thread-ids"] ?? []),
   };
 }
 
@@ -30,6 +31,10 @@ function pathBelongsToRoot(cwd, root) {
 export function resolveProjectId(thread, catalog) {
   const assignedId = catalog.assignments?.[thread.id]?.projectId;
   if (assignedId && catalog.projects.some((project) => project.id === assignedId)) return assignedId;
+  const projectlessThreadIds = catalog.projectlessThreadIds instanceof Set
+    ? catalog.projectlessThreadIds
+    : new Set(catalog.projectlessThreadIds ?? []);
+  if (projectlessThreadIds.has(thread.id)) return OTHER_PROJECT_ID;
   const cwd = String(thread.cwd ?? "");
   let match = null;
   for (const project of catalog.projects) {
