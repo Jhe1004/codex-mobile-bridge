@@ -10,3 +10,4 @@
 - Provider-neutral relay URL and per-user encrypted pairing.
 - Sanitized setup, device inspection, CI, and AI-agent instructions.
 - Stable Android API 36 build baseline with support back to API 28.
+- Pinned Compose, Lifecycle, and OkHttp versions whose published metadata supports API 36.
