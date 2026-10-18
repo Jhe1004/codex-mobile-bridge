@@ -1,0 +1,13 @@
+{
+  "name": "codex-mobile-bridge-workspace",
+  "version": "0.10.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node scripts/run_node_tests.mjs",
+    "test:relay": "npm --prefix local_relay run test:integration"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

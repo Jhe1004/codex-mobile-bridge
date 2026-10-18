@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 300">
+  <defs><linearGradient id="g" x1="0" x2="1"><stop stop-color="#dce8ff"/><stop offset="1" stop-color="#d9f6e4"/></linearGradient></defs>
+  <rect width="720" height="300" rx="28" fill="url(#g)"/>
+  <circle cx="185" cy="150" r="78" fill="#356ae6"/>
+  <path d="M155 150l22 23 45-53" fill="none" stroke="white" stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="300" y="138" font-family="sans-serif" font-size="42" font-weight="700" fill="#172033">Chromium</text>
+  <text x="300" y="188" font-family="sans-serif" font-size="28" fill="#41506b">本地 HTML 已安全加载</text>
+</svg>

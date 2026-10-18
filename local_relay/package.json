@@ -1,0 +1,14 @@
+{
+  "name": "codex-mobile-relay",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Authenticated WebSocket relay between the Mac Codex bridge and Android clients.",
+  "scripts": {
+    "start": "node src/server.mjs",
+    "test:integration": "node scripts/integration_test.mjs"
+  },
+  "dependencies": {
+    "ws": "8.22.0"
+  }
+}

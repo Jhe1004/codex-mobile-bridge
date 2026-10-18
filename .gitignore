@@ -1,0 +1,17 @@
+/.gradle/
+/.idea/
+/.kotlin/
+/local.properties
+/**/build/
+/**/node_modules/
+/artifacts/
+/config/pairing.json
+/config/device-profile.json
+/.env
+*.jks
+*.keystore
+*.pem
+*.p12
+*.mobileprovision
+*.log
+.DS_Store

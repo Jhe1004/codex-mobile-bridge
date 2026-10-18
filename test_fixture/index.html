@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Codex Mobile HTML 浏览器测试</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="card">
+    <img src="sample.svg" alt="Codex Mobile 浏览器测试图">
+    <p class="eyebrow">CODEX MOBILE · 0.7.2</p>
+    <h1>HTML 浏览器工作正常</h1>
+    <p>这个页面来自 Mac。CSS、图片和脚本都通过用户配置的安全隧道按需传到了手机。</p>
+    <div class="checks">
+      <span>✓ HTML 已渲染</span>
+      <span>✓ 相对 CSS 已加载</span>
+      <span>✓ 相对图片已加载</span>
+      <span id="js-check">… 正在检查 JavaScript</span>
+    </div>
+    <a class="button" href="second.html">打开第二个本地 HTML</a>
+  </main>
+  <script>document.getElementById('js-check').textContent = '✓ JavaScript 已执行';</script>
+</body>
+</html>
