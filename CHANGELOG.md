@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.19.0 - 2026-10-19
+
+- While the phone is connected, refresh the Codex thread list every five seconds and verify every conversation updated within the last 24 hours.
+- Keep running conversations in the five-second verification set even when their recorded update time is older.
+- Cache newly changed conversations on Android before they are opened, so recent chats appear immediately from local storage.
+- Isolate per-conversation failures and retry them on the next pass without blocking the remaining conversations.
+- Limit Mac-side history reads to four concurrent conversations and prevent overlapping Android synchronization rounds.
+- Run the persistent bridge as Android's cross-device remote-messaging service instead of a time-limited data-sync service.
+
 ## 0.18.0 - 2026-10-19
 
 - Replaced rollout-file-only cache validation with a digest of the actual latest visible Codex messages.

@@ -86,7 +86,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity() {
     private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
@@ -535,12 +534,6 @@ private fun ChatScreen(state: BridgeUiState) {
             // The final spacer is the true last item, so long messages also open at their bottom.
             listState.scrollToItem(lastItemIndex)
             initialBottomShown = true
-        }
-    }
-    LaunchedEffect(state.selectedThread?.id) {
-        while (true) {
-            delay(5_000)
-            BridgeClient.refreshSelectedThread()
         }
     }
     BackHandler(onBack = BridgeClient::backToThreads)

@@ -6,6 +6,7 @@ import path from "node:path";
 import { WebSocket } from "ws";
 import { enrichThreadList, readProjectCatalog } from "./project_catalog.mjs";
 import { syncLatestVisibleMessages } from "./thread_sync.mjs";
+import { syncRecentlyActiveThreads } from "./recent_thread_sync.mjs";
 import { createFileAccess } from "./file_access.mjs";
 import { readableAppServerError, startTurnOnThread } from "./turn_start.mjs";
 import { DesktopIpcClient } from "./desktop_ipc.mjs";
@@ -209,7 +210,7 @@ async function startAppServer() {
   });
   try {
     await rpc("initialize", {
-      clientInfo: { name: "codex_mobile_bridge", title: "Codex Mobile Bridge", version: "0.18.0" },
+      clientInfo: { name: "codex_mobile_bridge", title: "Codex Mobile Bridge", version: "0.19.0" },
       capabilities: { experimentalApi: true },
     });
     appReady = true;
@@ -256,6 +257,21 @@ async function dispatchRequest(message) {
           knownThreadSources.get(payload.threadId) ?? knownThreads.get(payload.threadId) ?? {},
           { knownRevision: payload.knownRevision, limit: payload.limit ?? 120 },
         );
+        break;
+      case "thread.recent.sync":
+        {
+          // Refresh the source list on every pass. This makes archive, title,
+          // project, running, and completion changes converge together with
+          // message content instead of relying on an older relay snapshot.
+          const threadList = await listAllThreads();
+          desktopCompletionReconciler.observe(threadList.data);
+          const sync = await syncRecentlyActiveThreads(rpc, threadList.data, {
+            knownRevisions: payload.knownRevisions ?? {},
+            getSourceThread: (thread) => knownThreadSources.get(thread.id) ?? thread,
+            limit: 120,
+          });
+          result = { threadList, sync };
+        }
         break;
       case "file.stat":
         result = await fileAccess.metadata(payload.threadId, payload.path);
