@@ -8,6 +8,7 @@ import { enrichThreadList, readProjectCatalog } from "./project_catalog.mjs";
 import { syncLatestVisibleMessages } from "./thread_sync.mjs";
 import { syncRecentlyActiveThreads } from "./recent_thread_sync.mjs";
 import { createFileAccess } from "./file_access.mjs";
+import { createThreadFileLinkAuthorizer, listAssistantMessagesForFileLinks } from "./thread_file_links.mjs";
 import { readableAppServerError, startTurnOnThread } from "./turn_start.mjs";
 import { DesktopIpcClient } from "./desktop_ipc.mjs";
 import { createDesktopThreadPreparer } from "./desktop_prepare.mjs";
@@ -58,7 +59,16 @@ function allowedRootsForThread(threadId) {
   return [...new Set([thread.cwd, ...registeredRoots, ...explicitFileRoots].filter(Boolean))];
 }
 
-const fileAccess = createFileAccess({ getAllowedRoots: allowedRootsForThread });
+const fileLinkAuthorizer = createThreadFileLinkAuthorizer({
+  loadMessages: async (threadId) => {
+    if (!appReady) throw new Error("Codex app-server is not ready");
+    return listAssistantMessagesForFileLinks(rpc, threadId);
+  },
+});
+const fileAccess = createFileAccess({
+  getAllowedRoots: allowedRootsForThread,
+  authorizeLinkedFile: fileLinkAuthorizer.authorize,
+});
 const fileUpload = createFileUpload({ threadExists: (threadId) => knownThreads.has(threadId) });
 const desktopIpc = new DesktopIpcClient();
 const desktopPreparer = createDesktopThreadPreparer({ desktopIpc, wakeDesktopThread });
@@ -210,7 +220,7 @@ async function startAppServer() {
   });
   try {
     await rpc("initialize", {
-      clientInfo: { name: "codex_mobile_bridge", title: "Codex Mobile Bridge", version: "0.20.1" },
+      clientInfo: { name: "codex_mobile_bridge", title: "Codex Mobile Bridge", version: "0.21.0" },
       capabilities: { experimentalApi: true },
     });
     appReady = true;
@@ -257,6 +267,9 @@ async function dispatchRequest(message) {
           knownThreadSources.get(payload.threadId) ?? knownThreads.get(payload.threadId) ?? {},
           { knownRevision: payload.knownRevision, limit: payload.limit ?? 120 },
         );
+        if (!result.notModified) {
+          await fileLinkAuthorizer.rememberMessages(payload.threadId, result.messages);
+        }
         break;
       case "thread.recent.sync":
         {
@@ -277,6 +290,11 @@ async function dispatchRequest(message) {
               });
             } : null,
           });
+          for (const entry of sync.data) {
+            if (!entry?.failed && !entry?.notModified) {
+              await fileLinkAuthorizer.rememberMessages(entry.threadId, entry.messages);
+            }
+          }
           result = { threadList, sync };
         }
         break;

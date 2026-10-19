@@ -96,7 +96,7 @@ The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`, and the
 
 - **Separate Random Tokens**: `generate_pairing.sh` creates distinct 256-bit random tokens for the Mac bridge and Android client. Mac tokens are stored in macOS Keychain, and Android credentials are stored in Android Keystore.
 - **Ignored Local Pairing Config**: `config/pairing.json` is used only for local USB provisioning and is ignored by Git.
-- **Scoped File Access**: File previews are restricted to the active conversation's project root plus directories explicitly listed in `CODEX_MOBILE_FILE_ROOTS`. See [SECURITY.md](../SECURITY.md) before exposing a tunnel publicly.
+- **Scoped File Access**: File previews can read registered Codex project roots and exact local-file links explicitly emitted by the assistant in that same conversation. User-authored paths, arbitrary phone requests, and links from other conversations remain denied. Opening an authorized HTML file also grants only its own directory so page assets can load. Long-lived extra roots may still be listed in `CODEX_MOBILE_FILE_ROOTS`. See [SECURITY.md](../SECURITY.md) before exposing a tunnel publicly.
 - **Controlled Reverse Uploads**: Android cannot choose a Mac destination path. The bridge assigns a random path under the current user's Application Support directory and verifies size plus SHA-256 before an attachment can be sent. Unsent files expire; sent attachments remain available to old chats.
 - **Private Conversation Cache**: Message history remains in the Android app's private storage, bounded to 64 MB and the 40 most recently used chats. Clearing app data or uninstalling removes it.
 

@@ -9,6 +9,11 @@
   proxy. Do not open the raw relay port to the internet.
 - `CODEX_MOBILE_FILE_ROOTS` is an allow-list. Add only folders that the phone is
   allowed to read.
+- A conversation may also read an exact existing local-file link emitted by an
+  assistant message in that same conversation. User-authored paths, arbitrary
+  phone requests, and links from another conversation do not grant access. Once
+  an authorized HTML file is opened, its real parent directory is scoped to that
+  conversation so the page can load its own images, styles, and scripts.
 - Reverse uploads never accept a destination path from Android. The Mac bridge
   writes random names under its user-scoped Application Support directory,
   limits each file to 100 MB, and verifies size plus SHA-256. Unsent uploads

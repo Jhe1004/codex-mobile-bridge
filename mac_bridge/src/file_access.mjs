@@ -96,24 +96,41 @@ async function sha256(filePath) {
   return hash.digest("hex");
 }
 
-export function createFileAccess({ getAllowedRoots, maxFileBytes = DEFAULT_MAX_FILE_BYTES, chunkBytes = DEFAULT_CHUNK_BYTES }) {
+export function createFileAccess({
+  getAllowedRoots,
+  authorizeLinkedFile = async () => false,
+  maxFileBytes = DEFAULT_MAX_FILE_BYTES,
+  chunkBytes = DEFAULT_CHUNK_BYTES,
+}) {
+  const linkedHtmlRoots = new Map();
+
   async function resolveAllowedFile(threadId, rawTarget) {
     if (!threadId) throw new Error("threadId is required");
     const { requestedPath, line } = normalizeTarget(rawTarget);
     const roots = [...new Set((getAllowedRoots(threadId) ?? []).filter(Boolean))];
-    if (roots.length === 0) throw new Error("当前会话没有可读取的项目目录");
-
     const resolvedPath = await realpath(requestedPath);
     const resolvedRoots = [];
     for (const root of roots) {
       try { resolvedRoots.push(await realpath(root)); } catch { /* Ignore stale project roots. */ }
     }
-    if (!resolvedRoots.some((root) => belongsToRoot(resolvedPath, root))) {
-      throw new Error("安全限制：只能读取当前 Codex 项目目录内的文件");
+    const projectAllowed = resolvedRoots.some((root) => belongsToRoot(resolvedPath, root));
+    const htmlResourceAllowed = [...(linkedHtmlRoots.get(threadId) ?? [])]
+      .some((root) => belongsToRoot(resolvedPath, root));
+    const linkedFileAllowed = !projectAllowed && !htmlResourceAllowed
+      ? await authorizeLinkedFile(threadId, resolvedPath)
+      : false;
+    if (!projectAllowed && !htmlResourceAllowed && !linkedFileAllowed) {
+      if (roots.length === 0) throw new Error("当前会话没有可读取的项目目录或已授权文件链接");
+      throw new Error("安全限制：只能读取 Codex 项目目录或当前会话中由 Codex 提供的本地文件链接");
     }
     const info = await stat(resolvedPath);
     if (!info.isFile()) throw new Error("链接目标不是普通文件");
     if (info.size > maxFileBytes) throw new Error(`文件超过手机传输上限 ${Math.round(maxFileBytes / 1024 / 1024)} MB`);
+    if (linkedFileAllowed && [".html", ".htm"].includes(path.extname(resolvedPath).toLowerCase())) {
+      const rootsForThread = linkedHtmlRoots.get(threadId) ?? new Set();
+      rootsForThread.add(path.dirname(resolvedPath));
+      linkedHtmlRoots.set(threadId, rootsForThread);
+    }
     return { resolvedPath, info, line };
   }
 

@@ -96,7 +96,7 @@ npm --prefix local_relay run test:integration
 
 - **独立随机令牌**：`generate_pairing.sh` 会为 Mac 桥接端与 Android 客户端分别生成独立的 256-bit 随机令牌；Mac 端存储在系统钥匙串（Keychain）中，Android 端导入后由系统 Keystore 加密保存。
 - **本地配对文件隔离**：生成的 `config/pairing.json` 仅用于首次连接配对，已被 `.gitignore` 排除。
-- **受控的文件访问范围**：手机端默认仅能读取当前会话所属项目的根目录；如需额外开放其他目录，可在启动服务前通过环境变量 `CODEX_MOBILE_FILE_ROOTS` 显式指定（以冒号分隔）。外网部署前建议先阅读 [SECURITY.md](SECURITY.md)。
+- **受控的文件访问范围**：手机端可读取已登记的 Codex 项目目录，也可读取当前会话中由 Codex 回复明确给出的本地文件链接。用户消息里的路径、手机自行提交的任意路径和其他会话的链接都不会获得授权。打开已授权 HTML 后，只会额外开放它所在目录的网页资源；如需长期开放其他目录，可通过 `CODEX_MOBILE_FILE_ROOTS` 显式指定。外网部署前建议先阅读 [SECURITY.md](SECURITY.md)。
 - **受控的反向上传**：手机不能指定 Mac 上的保存路径。上传文件由 Mac 桥接服务随机命名，写入当前用户的 Application Support 目录，完成大小与 SHA-256 校验后才可发送；未发送的附件默认保留 7 天，已经进入会话的附件会持久保留，避免旧会话中的文件路径失效。
 - **私有会话缓存**：会话文本只保存在 Android 应用的私有目录中，其他 App 不能直接读取。缓存最多占用 64 MB 并保留最近 40 个会话；清除 App 数据或卸载 App 会同时删除缓存。
 
