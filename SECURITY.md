@@ -9,6 +9,13 @@
   proxy. Do not open the raw relay port to the internet.
 - `CODEX_MOBILE_FILE_ROOTS` is an allow-list. Add only folders that the phone is
   allowed to read.
+- Reverse uploads never accept a destination path from Android. The Mac bridge
+  writes random names under its user-scoped Application Support directory,
+  limits each file to 100 MB, and verifies size plus SHA-256. Unsent uploads
+  expire after seven days; files actually attached to a Codex turn move into a
+  persistent `sent` directory so old chats do not lose their attachment path.
+  `CODEX_MOBILE_UPLOAD_ROOT` may override the directory for advanced deployments;
+  keep that directory private to the current macOS user.
 - The Android token is encrypted with Android Keystore after import. The
   temporary pairing file is deleted after a successful import.
 - Rotate both tokens after a lost phone, a shared log, or a suspected leak.

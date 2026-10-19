@@ -11,18 +11,20 @@ export async function startTurnOnThread(rpc, payload = {}, {
   wakeDesktopThread,
   onBridgeOwnership,
 } = {}) {
-  if (!payload.threadId || typeof payload.text !== "string" || !payload.text.trim()) {
-    throw new Error("threadId and non-empty text are required");
+  const attachmentInput = Array.isArray(payload.attachmentInput) ? payload.attachmentInput : [];
+  if (!payload.threadId || typeof payload.text !== "string" || (!payload.text.trim() && attachmentInput.length === 0)) {
+    throw new Error("threadId and text or attachments are required");
   }
 
-  const text = payload.text.trim();
+  const text = payload.text.trim() || "请查看我附加的文件。";
+  const input = [{ type: "text", text, text_elements: [] }, ...attachmentInput];
   const clientUserMessageId = payload.clientUserMessageId || randomUUID();
 
   // Desktop owns most saved conversations. Its IPC follower path asks that
   // exact owner to start the turn immediately, even while the chat is closed.
   if (desktopIpc && !preferBridge) {
     try {
-      const accepted = await desktopIpc.startTurn(payload.threadId, text, clientUserMessageId);
+      const accepted = await desktopIpc.startTurn(payload.threadId, input, clientUserMessageId, null, payload.desktopAttachments ?? []);
       return {
         accepted: true,
         delivery: "desktop-ipc",
@@ -54,9 +56,10 @@ export async function startTurnOnThread(rpc, payload = {}, {
         if (ownerClientId) {
           const accepted = await desktopIpc.startTurn(
             payload.threadId,
-            text,
+            input,
             clientUserMessageId,
             ownerClientId,
+            payload.desktopAttachments ?? [],
           );
           return {
             accepted: true,
@@ -78,7 +81,7 @@ export async function startTurnOnThread(rpc, payload = {}, {
   try {
     const result = await rpc("turn/start", {
       threadId: payload.threadId,
-      input: [{ type: "text", text }],
+      input,
       clientUserMessageId,
     });
     return { ...result, delivery: "bridge-app-server", clientUserMessageId };
@@ -89,7 +92,7 @@ export async function startTurnOnThread(rpc, payload = {}, {
   await rpc("thread/resume", { threadId: payload.threadId, excludeTurns: true });
   const result = await rpc("turn/start", {
     threadId: payload.threadId,
-    input: [{ type: "text", text }],
+    input,
     clientUserMessageId,
   });
   return { ...result, delivery: "bridge-app-server", clientUserMessageId };

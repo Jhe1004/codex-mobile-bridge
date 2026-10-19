@@ -13,6 +13,7 @@ import { createDesktopThreadPreparer } from "./desktop_prepare.mjs";
 import { wakeDesktopThread } from "./desktop_wake.mjs";
 import { createThreadStatusAnalyzer } from "./thread_status.mjs";
 import { DesktopCompletionReconciler } from "./desktop_completion_reconciler.mjs";
+import { createFileUpload, desktopAttachmentContext, turnAttachmentInput } from "./file_upload.mjs";
 
 const projectRoot = process.env.CODEX_PROJECT_ROOT || os.homedir();
 const relayBase = process.env.RELAY_URL || "ws://127.0.0.1:18880/v1/ws";
@@ -56,6 +57,7 @@ function allowedRootsForThread(threadId) {
 }
 
 const fileAccess = createFileAccess({ getAllowedRoots: allowedRootsForThread });
+const fileUpload = createFileUpload({ threadExists: (threadId) => knownThreads.has(threadId) });
 const desktopIpc = new DesktopIpcClient();
 const desktopPreparer = createDesktopThreadPreparer({ desktopIpc, wakeDesktopThread });
 const annotateThreadStatuses = createThreadStatusAnalyzer();
@@ -219,7 +221,7 @@ async function startAppServer() {
 async function dispatchRequest(message) {
   const { requestId, action, payload = {} } = message;
   try {
-    if (!appReady && !["status", "thread.prepare", "file.stat", "file.read"].includes(action)) throw new Error("Codex app-server is not ready");
+    if (!appReady && !["status", "thread.prepare", "file.stat", "file.read", "file.upload.begin", "file.upload.chunk", "file.upload.finish", "file.upload.discard"].includes(action)) throw new Error("Codex app-server is not ready");
     let result;
     switch (action) {
       case "status":
@@ -258,6 +260,18 @@ async function dispatchRequest(message) {
           payload.expectedMtimeMs,
         );
         break;
+      case "file.upload.begin":
+        result = await fileUpload.begin(payload.threadId, payload);
+        break;
+      case "file.upload.chunk":
+        result = await fileUpload.append(payload.threadId, payload.uploadId, payload.offset, payload.data);
+        break;
+      case "file.upload.finish":
+        result = await fileUpload.finish(payload.threadId, payload.uploadId);
+        break;
+      case "file.upload.discard":
+        result = await fileUpload.discard(payload.threadId, payload.uploadId);
+        break;
       case "thread.start":
         result = await rpc("thread/start", {
           cwd: payload.cwd || projectRoot,
@@ -273,7 +287,12 @@ async function dispatchRequest(message) {
         {
           const startedAtMs = Date.now();
           const baselineRevision = knownThreads.get(payload.threadId)?.completionRevision ?? "";
-          result = await startTurnOnThread(rpc, payload, {
+          const attachments = await fileUpload.resolve(payload.threadId, payload.attachmentIds ?? []);
+          result = await startTurnOnThread(rpc, {
+            ...payload,
+            attachmentInput: turnAttachmentInput(attachments),
+            desktopAttachments: desktopAttachmentContext(attachments),
+          }, {
             desktopIpc,
             preferBridge: bridgeOwnedThreads.has(payload.threadId),
             prepareDesktopThread: (threadId) => desktopPreparer.prepare(threadId),
@@ -282,7 +301,7 @@ async function dispatchRequest(message) {
               bridgeOwnedThreads.add(threadId);
             },
           });
-          log("turn_delivery", { threadId: payload.threadId, delivery: result.delivery });
+          log("turn_delivery", { threadId: payload.threadId, delivery: result.delivery, attachmentCount: attachments.length });
           if (result.delivery.startsWith("desktop-ipc")) {
             desktopCompletionReconciler.track({
               threadId: payload.threadId,

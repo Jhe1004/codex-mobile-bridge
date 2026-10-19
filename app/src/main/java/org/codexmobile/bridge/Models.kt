@@ -86,6 +86,24 @@ data class FileTransferState(
     val totalBytes: Long,
 )
 
+enum class AttachmentUploadStatus {
+    HASHING,
+    UPLOADING,
+    READY,
+    FAILED,
+}
+
+data class ComposerAttachment(
+    val localId: String,
+    val name: String,
+    val mimeType: String,
+    val size: Long,
+    val uploadedBytes: Long = 0,
+    val remoteUploadId: String? = null,
+    val status: AttachmentUploadStatus = AttachmentUploadStatus.HASHING,
+    val error: String? = null,
+)
+
 data class FilePreview(
     val localPath: String,
     val sourcePath: String,
@@ -117,5 +135,6 @@ data class BridgeUiState(
     val approval: PendingApproval? = null,
     val fileTransfer: FileTransferState? = null,
     val filePreview: FilePreview? = null,
+    val composerAttachments: List<ComposerAttachment> = emptyList(),
     val error: String? = null,
 )

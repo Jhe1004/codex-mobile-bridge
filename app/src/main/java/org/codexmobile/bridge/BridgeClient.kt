@@ -3,12 +3,14 @@ package org.codexmobile.bridge
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
+import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import android.util.Base64
+import android.provider.OpenableColumns
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -17,7 +19,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -38,6 +42,8 @@ import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
@@ -54,6 +60,7 @@ object BridgeClient {
     @Volatile private var lastRelayMessageAtMs = 0L
     private val pending = ConcurrentHashMap<String, (JSONObject) -> Unit>()
     private val pendingErrors = ConcurrentHashMap<String, (String) -> Unit>()
+    private val cancelledAttachmentIds = ConcurrentHashMap.newKeySet<String>()
     @Volatile private var activeTransferId: String? = null
     @Volatile private var activeTransferFile: File? = null
     private var reconnectDelay = 1_000L
@@ -169,7 +176,24 @@ object BridgeClient {
     }
 
     fun backToThreads() {
-        _state.value = _state.value.copy(
+        val current = _state.value
+        current.composerAttachments.forEach { attachment ->
+            if (attachment.status == AttachmentUploadStatus.HASHING ||
+                attachment.status == AttachmentUploadStatus.UPLOADING
+            ) {
+                cancelledAttachmentIds.add(attachment.localId)
+            }
+            attachment.remoteUploadId?.let { uploadId ->
+                current.selectedThread?.id?.let { threadId ->
+                    request(
+                        "file.upload.discard",
+                        JSONObject().put("threadId", threadId).put("uploadId", uploadId),
+                        onError = {},
+                    ) {}
+                }
+            }
+        }
+        _state.value = current.copy(
             selectedThread = null,
             messages = emptyList(),
             pendingOutgoing = null,
@@ -179,6 +203,7 @@ object BridgeClient {
             sendPending = false,
             preparingThreadId = null,
             preparedThreadId = null,
+            composerAttachments = emptyList(),
             error = null,
         )
     }
@@ -199,12 +224,23 @@ object BridgeClient {
     fun send(text: String, onAccepted: () -> Unit = {}) {
         val thread = _state.value.selectedThread ?: return
         val trimmed = text.trim()
-        if (trimmed.isBlank() || _state.value.sendPending || _state.value.activeTurnId != null) return
+        val attachments = _state.value.composerAttachments
+        val readyAttachments = attachments.filter { it.status == AttachmentUploadStatus.READY && it.remoteUploadId != null }
+        if ((trimmed.isBlank() && readyAttachments.isEmpty()) ||
+            attachments.any { it.status != AttachmentUploadStatus.READY } ||
+            _state.value.sendPending || _state.value.activeTurnId != null
+        ) return
+        val attachmentSummary = readyAttachments.joinToString("\n") { "- ${it.name}" }
+        val visibleText = when {
+            readyAttachments.isEmpty() -> trimmed
+            trimmed.isBlank() -> "请查看我附加的文件：\n$attachmentSummary"
+            else -> "$trimmed\n\n附件：\n$attachmentSummary"
+        }
         val clientUserMessageId = UUID.randomUUID().toString()
         val optimisticMessage = ChatMessage(
             id = "local-$clientUserMessageId",
             role = "user",
-            text = trimmed,
+            text = visibleText,
             detail = "正在发送…",
             clientId = clientUserMessageId,
         )
@@ -221,7 +257,8 @@ object BridgeClient {
             JSONObject()
                 .put("threadId", thread.id)
                 .put("text", trimmed)
-                .put("clientUserMessageId", clientUserMessageId),
+                .put("clientUserMessageId", clientUserMessageId)
+                .put("attachmentIds", JSONArray(readyAttachments.mapNotNull { it.remoteUploadId })),
             onError = { message ->
                 val current = _state.value
                 _state.value = current.copy(
@@ -246,10 +283,192 @@ object BridgeClient {
                 sendPending = false,
                 preparingThreadId = null,
                 preparedThreadId = thread.id,
+                composerAttachments = emptyList(),
                 error = null,
             )
             mainHandler.post(onAccepted)
         }
+    }
+
+    fun addAttachments(uris: List<Uri>) {
+        val threadId = _state.value.selectedThread?.id ?: return
+        val availableSlots = (MAX_ATTACHMENTS_PER_TURN - _state.value.composerAttachments.size).coerceAtLeast(0)
+        if (availableSlots == 0) {
+            _state.value = _state.value.copy(error = "一次最多发送 $MAX_ATTACHMENTS_PER_TURN 个附件")
+            return
+        }
+        uris.take(availableSlots).forEach { uri -> scope.launch { uploadAttachment(threadId, uri) } }
+        if (uris.size > availableSlots) {
+            _state.value = _state.value.copy(error = "一次最多发送 $MAX_ATTACHMENTS_PER_TURN 个附件")
+        }
+    }
+
+    fun removeAttachment(localId: String) {
+        val attachment = _state.value.composerAttachments.firstOrNull { it.localId == localId } ?: return
+        if (attachment.status == AttachmentUploadStatus.HASHING ||
+            attachment.status == AttachmentUploadStatus.UPLOADING
+        ) {
+            cancelledAttachmentIds.add(localId)
+        }
+        _state.update { current ->
+            current.copy(composerAttachments = current.composerAttachments.filterNot { it.localId == localId })
+        }
+        val threadId = _state.value.selectedThread?.id
+        val remoteId = attachment.remoteUploadId
+        if (threadId != null && remoteId != null) {
+            request("file.upload.discard", JSONObject().put("threadId", threadId).put("uploadId", remoteId), onError = {}) {}
+        }
+    }
+
+    private suspend fun uploadAttachment(threadId: String, uri: Uri) {
+        val context = appContext ?: return
+        val localId = UUID.randomUUID().toString()
+        var remoteUploadId: String? = null
+        updateAttachment(
+            ComposerAttachment(
+                localId = localId,
+                name = uri.lastPathSegment?.substringAfterLast('/') ?: "附件",
+                mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream",
+                size = 0,
+            ),
+            append = true,
+        )
+        try {
+            val metadata = inspectAttachment(context, uri)
+            if (metadata.size > MAX_UPLOAD_BYTES) throw IllegalArgumentException("${metadata.name} 超过 100 MB 上传上限")
+            if (cancelledAttachmentIds.contains(localId)) return
+            updateAttachment(
+                ComposerAttachment(localId = localId, name = metadata.name, mimeType = metadata.mimeType, size = metadata.size),
+            )
+            if (_state.value.selectedThread?.id != threadId) throw IllegalStateException("会话已经切换，请重新选择文件")
+            val begin = requestAwait(
+                "file.upload.begin",
+                JSONObject()
+                    .put("threadId", threadId)
+                    .put("name", metadata.name)
+                    .put("mimeType", metadata.mimeType)
+                    .put("size", metadata.size)
+                    .put("sha256", metadata.sha256),
+            )
+            val uploadId = begin.getString("uploadId")
+            remoteUploadId = uploadId
+            val chunkBytes = begin.optInt("chunkBytes", DEFAULT_UPLOAD_CHUNK_BYTES).coerceIn(1, DEFAULT_UPLOAD_CHUNK_BYTES)
+            updateAttachmentById(localId) { it.copy(remoteUploadId = uploadId, status = AttachmentUploadStatus.UPLOADING) }
+            context.contentResolver.openInputStream(uri)?.buffered()?.use { input ->
+                val buffer = ByteArray(chunkBytes)
+                var offset = 0L
+                while (true) {
+                    if (cancelledAttachmentIds.contains(localId)) throw IllegalStateException("上传已取消")
+                    if (_state.value.selectedThread?.id != threadId) throw IllegalStateException("会话已经切换，请重新选择文件")
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    if (count == 0) continue
+                    requestAwait(
+                        "file.upload.chunk",
+                        JSONObject()
+                            .put("threadId", threadId)
+                            .put("uploadId", uploadId)
+                            .put("offset", offset)
+                            .put("data", Base64.encodeToString(buffer, 0, count, Base64.NO_WRAP)),
+                    )
+                    offset += count
+                    updateAttachmentById(localId) { it.copy(uploadedBytes = offset) }
+                }
+            } ?: throw IllegalArgumentException("无法读取所选文件")
+            requestAwait(
+                "file.upload.finish",
+                JSONObject().put("threadId", threadId).put("uploadId", uploadId),
+            )
+            updateAttachmentById(localId) {
+                it.copy(uploadedBytes = it.size, status = AttachmentUploadStatus.READY, error = null)
+            }
+        } catch (error: Throwable) {
+            remoteUploadId?.let { uploadId ->
+                runCatching {
+                    requestAwait("file.upload.discard", JSONObject().put("threadId", threadId).put("uploadId", uploadId))
+                }
+            }
+            if (cancelledAttachmentIds.contains(localId)) return
+            val message = error.message?.takeIf { it.isNotBlank() } ?: "文件上传失败"
+            val existing = _state.value.composerAttachments.firstOrNull { it.localId == localId }
+            if (existing == null) {
+                updateAttachment(
+                    ComposerAttachment(
+                        localId = localId,
+                        name = uri.lastPathSegment?.substringAfterLast('/') ?: "附件",
+                        mimeType = "application/octet-stream",
+                        size = 0,
+                        status = AttachmentUploadStatus.FAILED,
+                        error = message,
+                    ),
+                    append = true,
+                )
+            } else {
+                updateAttachmentById(localId) { it.copy(status = AttachmentUploadStatus.FAILED, error = message) }
+            }
+        } finally {
+            cancelledAttachmentIds.remove(localId)
+        }
+    }
+
+    private fun updateAttachment(attachment: ComposerAttachment, append: Boolean = false) {
+        _state.update { current ->
+            current.copy(
+                composerAttachments = if (append) current.composerAttachments + attachment else {
+                    current.composerAttachments.map { if (it.localId == attachment.localId) attachment else it }
+                },
+                error = null,
+            )
+        }
+    }
+
+    private fun updateAttachmentById(localId: String, transform: (ComposerAttachment) -> ComposerAttachment) {
+        _state.update { current ->
+            current.copy(
+                composerAttachments = current.composerAttachments.map { if (it.localId == localId) transform(it) else it },
+            )
+        }
+    }
+
+    private suspend fun requestAwait(action: String, payload: JSONObject): JSONObject = suspendCancellableCoroutine { continuation ->
+        request(
+            action,
+            payload,
+            onError = { message -> if (continuation.isActive) continuation.resumeWithException(IllegalStateException(message)) },
+        ) { result ->
+            if (continuation.isActive) continuation.resume(result)
+        }
+    }
+
+    private fun inspectAttachment(context: Context, uri: Uri): AttachmentMetadata {
+        var name = uri.lastPathSegment?.substringAfterLast('/')?.ifBlank { null } ?: "attachment.bin"
+        context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME).takeIf { it >= 0 }?.let { index ->
+                    cursor.getString(index)?.takeIf { it.isNotBlank() }?.let { name = it }
+                }
+            }
+        }
+        val digest = MessageDigest.getInstance("SHA-256")
+        var actualSize = 0L
+        context.contentResolver.openInputStream(uri)?.buffered()?.use { input ->
+            val buffer = ByteArray(DEFAULT_UPLOAD_CHUNK_BYTES)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                if (count == 0) continue
+                actualSize += count
+                if (actualSize > MAX_UPLOAD_BYTES) throw IllegalArgumentException("$name 超过 100 MB 上传上限")
+                digest.update(buffer, 0, count)
+            }
+        } ?: throw IllegalArgumentException("无法读取所选文件")
+        val sha256 = digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
+        return AttachmentMetadata(
+            name = name.replace(Regex("[\\/\\u0000-\\u001f]"), "_").take(160).ifBlank { "attachment.bin" },
+            mimeType = context.contentResolver.getType(uri)?.take(160) ?: mimeTypeFromName(name),
+            size = actualSize,
+            sha256 = sha256,
+        )
     }
 
     fun stopTurn() {
@@ -597,8 +816,10 @@ object BridgeClient {
     private fun closeTransport() {
         webSocket?.close(1000, "reconnect")
         webSocket = null
+        val transportErrors = pendingErrors.values.toList()
         pending.clear()
         pendingErrors.clear()
+        transportErrors.forEach { it("连接中断") }
         if (_state.value.sendPending) {
             val current = _state.value
             val pendingOutgoing = current.pendingOutgoing
@@ -965,8 +1186,48 @@ object BridgeClient {
         val line: Int?,
     )
 
+    private data class AttachmentMetadata(
+        val name: String,
+        val mimeType: String,
+        val size: Long,
+        val sha256: String,
+    )
+
     data class HtmlResource(val bytes: ByteArray, val mimeType: String)
 
     private const val MAX_HTML_RESOURCE_BYTES = 20L * 1024L * 1024L
     private const val HTML_RESOURCE_TIMEOUT_SECONDS = 30L
+    private const val MAX_ATTACHMENTS_PER_TURN = 10
+    private const val MAX_UPLOAD_BYTES = 100L * 1024L * 1024L
+    private const val DEFAULT_UPLOAD_CHUNK_BYTES = 512 * 1024
+}
+
+private fun mimeTypeFromName(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {
+    "png" -> "image/png"
+    "jpg", "jpeg" -> "image/jpeg"
+    "gif" -> "image/gif"
+    "webp" -> "image/webp"
+    "heic" -> "image/heic"
+    "heif" -> "image/heif"
+    "svg" -> "image/svg+xml"
+    "pdf" -> "application/pdf"
+    "txt", "log" -> "text/plain"
+    "md", "markdown" -> "text/markdown"
+    "csv" -> "text/csv"
+    "tsv" -> "text/tab-separated-values"
+    "json" -> "application/json"
+    "html", "htm" -> "text/html"
+    "doc" -> "application/msword"
+    "docx" -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    "xls" -> "application/vnd.ms-excel"
+    "xlsx" -> "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    "ppt" -> "application/vnd.ms-powerpoint"
+    "pptx" -> "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    "mp3" -> "audio/mpeg"
+    "m4a" -> "audio/mp4"
+    "wav" -> "audio/wav"
+    "mp4" -> "video/mp4"
+    "webm" -> "video/webm"
+    "zip" -> "application/zip"
+    else -> "application/octet-stream"
 }

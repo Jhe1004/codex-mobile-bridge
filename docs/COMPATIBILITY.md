@@ -23,9 +23,34 @@ changed through the `DesktopIpcClient` constructor in tests or code.
 5. Send one test message from Android.
 6. Immediately open the same chat in Codex Desktop.
 7. Switch chats and send again after the Desktop writer handoff.
-8. Preview one explicit, non-sensitive test file.
+8. Preview one explicit, non-sensitive image, PDF, HTML, and text fixture.
+9. Confirm the open-with icon appears in every preview type.
+10. Upload one generated image and one generated text file from Android, then verify both appear in the harmless test chat.
 
 Do not use arbitrary user files or real private chats as public test fixtures.
+
+## Android file preview matrix
+
+| Format family | In-app behavior | Fallback |
+| --- | --- | --- |
+| PNG, JPEG, WebP, GIF, BMP, HEIC/HEIF, AVIF | Android image decoder; animated GIF/WebP can animate when the system decoder supports it | Open-with icon |
+| SVG | JavaScript-disabled, local-only WebView | Open-with icon |
+| PDF | Page-by-page `PdfRenderer` | Open-with icon |
+| HTML | Immersive local WebView with guarded relative-resource loading | Open-with icon |
+| Text, Markdown, CSV/TSV, JSON/XML/YAML, code and logs | Scrollable text viewer | Open-with icon |
+| Common audio and video | Android media player | Open-with icon |
+| Word, Excel, PowerPoint, archives and unknown binary files | File information screen | Open-with icon to a compatible installed app |
+
+Actual codec support for HEIC/HEIF, AVIF, audio, and video follows the Android
+version and codecs installed by the device vendor. A failed internal decode must
+show a readable error instead of an endless loading spinner.
+
+## Attachment input contract
+
+The bridge uses the current Codex app-server `UserInput` schema: supported image
+types become `localImage`, audio becomes `localAudio`, and other files become
+file mentions. Upload storage is server-selected, chunked, capped at 100 MB per
+file, limited to 10 files per turn, and accepted only after SHA-256 verification.
 
 ## Xiaomi HyperOS 4 Super Island
 

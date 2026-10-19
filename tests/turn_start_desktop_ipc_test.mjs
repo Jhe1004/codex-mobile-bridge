@@ -12,8 +12,8 @@ const result = await startTurnOnThread(async (method, params) => {
   return { turn: { id: "turn-1" } };
 }, { threadId: "thread-1", text: "  测试消息  " }, {
   desktopIpc: {
-    async startTurn(threadId, text, clientUserMessageId) {
-      calls.push({ method: "desktop-ipc", params: { threadId, text, clientUserMessageId } });
+    async startTurn(threadId, input, clientUserMessageId) {
+      calls.push({ method: "desktop-ipc", params: { threadId, input, clientUserMessageId } });
       return { ownerClientId: "desktop-owner" };
     },
   },
@@ -25,7 +25,7 @@ assert.equal(calls.length, 1);
 assert.equal(calls[0].method, "desktop-ipc");
 assert.equal(calls[0].params.threadId, "thread-1");
 assert.match(calls[0].params.clientUserMessageId, /^[0-9a-f-]{36}$/);
-assert.equal(calls[0].params.text, "测试消息");
+assert.deepEqual(calls[0].params.input, [{ type: "text", text: "测试消息", text_elements: [] }]);
 
 const wakeCalls = [];
 const afterWake = await startTurnOnThread(async () => {
@@ -33,9 +33,9 @@ const afterWake = await startTurnOnThread(async () => {
 }, { threadId: "thread-wake", text: "唤醒后发送" }, {
   desktopIpc: {
     attempts: 0,
-    async startTurn(threadId, text, clientUserMessageId, ownerClientId) {
+    async startTurn(threadId, input, clientUserMessageId, ownerClientId) {
       this.attempts += 1;
-      wakeCalls.push({ method: "desktop-ipc", threadId, text, clientUserMessageId, ownerClientId });
+      wakeCalls.push({ method: "desktop-ipc", threadId, input, clientUserMessageId, ownerClientId });
       if (this.attempts === 1) throw new DesktopOwnerUnavailableError();
       return { ownerClientId };
     },
@@ -59,9 +59,9 @@ const afterPreheat = await startTurnOnThread(async () => {
 }, { threadId: "thread-preheated", text: "预热后发送" }, {
   desktopIpc: {
     attempts: 0,
-    async startTurn(threadId, text, clientUserMessageId, ownerClientId) {
+    async startTurn(threadId, input, clientUserMessageId, ownerClientId) {
       this.attempts += 1;
-      sharedPrepareCalls.push({ method: "desktop-ipc", threadId, text, clientUserMessageId, ownerClientId });
+      sharedPrepareCalls.push({ method: "desktop-ipc", threadId, input, clientUserMessageId, ownerClientId });
       if (this.attempts === 1) throw new DesktopOwnerUnavailableError();
       return { ownerClientId };
     },
@@ -92,6 +92,29 @@ assert.equal(fallback.delivery, "bridge-app-server");
 assert.equal(fallback.turn.id, "turn-fallback");
 assert.deepEqual(fallbackCalls.map((call) => call.method), ["turn/start", "thread/resume", "turn/start"]);
 assert.deepEqual(bridgeOwnership, ["thread-2"]);
+
+const attachmentCalls = [];
+await startTurnOnThread(async () => { throw new Error("Desktop should accept attachment test"); }, {
+  threadId: "thread-attachment",
+  text: "看一下附件",
+  attachmentInput: [
+    { type: "localImage", path: "/private/tmp/example.png" },
+    { type: "mention", name: "notes.txt", path: "/private/tmp/notes.txt" },
+  ],
+  desktopAttachments: [
+    { label: "example.png", path: "/private/tmp/example.png", fsPath: "/private/tmp/example.png", isImageAttachment: true },
+  ],
+}, {
+  desktopIpc: {
+    async startTurn(threadId, input, clientUserMessageId, ownerClientId, attachments) {
+      attachmentCalls.push({ threadId, input, clientUserMessageId, ownerClientId, attachments });
+      return { ownerClientId: "desktop-owner" };
+    },
+  },
+});
+assert.equal(attachmentCalls.length, 1);
+assert.deepEqual(attachmentCalls[0].input.map((item) => item.type), ["text", "localImage", "mention"]);
+assert.equal(attachmentCalls[0].attachments[0].isImageAttachment, true);
 
 assert.equal(readableAppServerError(new Error('{"code":-32000,"message":"Thread is not loaded"}')), "Thread is not loaded");
 assert.equal(readableAppServerError(new Error("plain failure")), "plain failure");

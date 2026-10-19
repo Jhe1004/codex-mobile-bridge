@@ -25,6 +25,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -212,6 +213,14 @@ internal fun HtmlBrowserScreen(preview: FilePreview) {
                             }
                             IconButton(onClick = { keepChromeAlive(); webView?.reload() }) {
                                 Icon(Icons.Default.Refresh, "刷新网页")
+                            }
+                            IconButton(onClick = {
+                                keepChromeAlive()
+                                if (!openPreviewWithAnotherApp(context, preview)) {
+                                    Toast.makeText(context, "手机上没有可打开此文件的应用", Toast.LENGTH_SHORT).show()
+                                }
+                            }) {
+                                Icon(Icons.AutoMirrored.Filled.OpenInNew, "使用其他应用打开")
                             }
                             IconButton(onClick = { keepChromeAlive(); menuExpanded = true }) {
                                 Icon(Icons.Default.MoreVert, "更多操作")

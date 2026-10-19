@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.16.0 - 2026-10-19
+
+- Replace the image-preview spinner failure with format-aware PNG/JPEG/WebP/GIF/BMP/HEIC/HEIF/AVIF decoding and a readable fallback.
+- Add internal SVG, audio, and video preview paths while retaining PDF, HTML, text, code, and cached-file support.
+- Put an open-with icon in every file viewer, including the immersive HTML reader.
+- Add multi-file Android picking, visible upload progress, cancellation, 512 KB chunk transfer, size limits, and SHA-256 verification.
+- Send verified images as Codex local-image input, audio as local-audio input, and other files as file mentions without allowing Android to choose a Mac path.
+
 ## 0.15.0 - 2026-10-19
 
 - Stream large local HTML files from verified on-device storage instead of copying the whole document into a WebView string.

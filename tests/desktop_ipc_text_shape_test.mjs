@@ -81,7 +81,7 @@ await new Promise((resolve, reject) => {
 
 const client = new DesktopIpcClient({ socketPath, clientType: "shape-test" });
 try {
-  await client.startTurn("01a13fe2-bb25-7143-b379-73a005c2ff38", "手机文本");
+  await client.startTurn("01a13fe2-bb25-7143-b379-73a005c2ff38", [{ type: "text", text: "手机文本", text_elements: [] }]);
   await client.setThreadFollowing("01a13fe2-bb25-7143-b379-73a005c2ff38", "desktop-owner", false);
   await new Promise((resolve) => setTimeout(resolve, 25));
   assert.deepEqual(capturedTurnStart?.request?.input, [{
@@ -92,7 +92,7 @@ try {
   assert.deepEqual(followingStates, [true, false]);
   assert.deepEqual(protocolOrder, ["follow", "start-turn", "unfollow"]);
   await assert.rejects(
-    client.startTurn("01a13fe2-bb25-7143-b379-73a005c2ff38", "失败测试"),
+    client.startTurn("01a13fe2-bb25-7143-b379-73a005c2ff38", [{ type: "text", text: "失败测试", text_elements: [] }]),
     /rejected-for-test/,
   );
   await new Promise((resolve) => setTimeout(resolve, 25));

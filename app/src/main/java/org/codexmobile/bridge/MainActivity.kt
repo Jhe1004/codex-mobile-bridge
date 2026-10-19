@@ -10,6 +10,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -23,9 +24,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -36,6 +40,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -508,6 +513,9 @@ private fun ThreadActivityIndicator(activity: ThreadActivity) {
 @Composable
 private fun ChatScreen(state: BridgeUiState) {
     var input by remember { mutableStateOf("") }
+    val attachmentPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        BridgeClient.addAttachments(uris)
+    }
     val listState = rememberLazyListState()
     val threadId = state.selectedThread?.id
     val threadStatus = when {
@@ -561,34 +569,59 @@ private fun ChatScreen(state: BridgeUiState) {
                     shadowElevation = 5.dp,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(start = 8.dp, end = 6.dp, top = 3.dp, bottom = 3.dp),
-                        verticalAlignment = Alignment.Bottom,
-                    ) {
-                        OutlinedTextField(
-                            value = input,
-                            onValueChange = { input = it },
-                            modifier = Modifier.weight(1f),
-                            placeholder = { Text("询问 Codex", color = Color(0xFF9A9A9A)) },
-                            shape = RoundedCornerShape(24.dp),
-                            maxLines = 6,
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = Color.Transparent,
-                                unfocusedBorderColor = Color.Transparent,
-                                disabledBorderColor = Color.Transparent,
-                                focusedContainerColor = Color.Transparent,
-                                unfocusedContainerColor = Color.Transparent,
-                            ),
-                        )
-                        val canSend = input.isNotBlank() && state.activeTurnId == null && !state.sendPending
-                        IconButton(
-                            onClick = { BridgeClient.send(input) { input = "" } },
-                            enabled = canSend,
-                            modifier = Modifier
-                                .padding(start = 4.dp, bottom = 5.dp)
-                                .size(42.dp)
-                                .background(if (canSend) Ink else Color(0xFFD7D7D7), CircleShape),
-                        ) { Icon(Icons.AutoMirrored.Filled.Send, "发送", tint = Color.White) }
+                    Column(Modifier.fillMaxWidth()) {
+                        if (state.composerAttachments.isNotEmpty()) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState())
+                                    .padding(start = 12.dp, end = 12.dp, top = 10.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                state.composerAttachments.forEach { attachment ->
+                                    ComposerAttachmentChip(attachment, onRemove = { BridgeClient.removeAttachment(attachment.localId) })
+                                }
+                            }
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(start = 5.dp, end = 6.dp, top = 3.dp, bottom = 3.dp),
+                            verticalAlignment = Alignment.Bottom,
+                        ) {
+                            val canAttach = state.activeTurnId == null && !state.sendPending && state.composerAttachments.size < 10
+                            IconButton(
+                                onClick = { attachmentPicker.launch(arrayOf("*/*")) },
+                                enabled = canAttach,
+                                modifier = Modifier.padding(bottom = 5.dp),
+                            ) { Icon(Icons.Default.AttachFile, "添加图片或文件", tint = if (canAttach) Ink else Muted) }
+                            OutlinedTextField(
+                                value = input,
+                                onValueChange = { input = it },
+                                modifier = Modifier.weight(1f),
+                                placeholder = { Text("询问 Codex", color = Color(0xFF9A9A9A)) },
+                                shape = RoundedCornerShape(24.dp),
+                                maxLines = 6,
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = Color.Transparent,
+                                    unfocusedBorderColor = Color.Transparent,
+                                    disabledBorderColor = Color.Transparent,
+                                    focusedContainerColor = Color.Transparent,
+                                    unfocusedContainerColor = Color.Transparent,
+                                ),
+                            )
+                            val attachmentsReady = state.composerAttachments.isNotEmpty() &&
+                                state.composerAttachments.all { it.status == AttachmentUploadStatus.READY }
+                            val canSend = (input.isNotBlank() || attachmentsReady) &&
+                                state.activeTurnId == null && !state.sendPending &&
+                                state.composerAttachments.none { it.status != AttachmentUploadStatus.READY }
+                            IconButton(
+                                onClick = { BridgeClient.send(input) { input = "" } },
+                                enabled = canSend,
+                                modifier = Modifier
+                                    .padding(start = 4.dp, bottom = 5.dp)
+                                    .size(42.dp)
+                                    .background(if (canSend) Ink else Color(0xFFD7D7D7), CircleShape),
+                            ) { Icon(Icons.AutoMirrored.Filled.Send, "发送", tint = Color.White) }
+                        }
                     }
                 }
             }
@@ -607,6 +640,37 @@ private fun ChatScreen(state: BridgeUiState) {
             if (state.streamingText.isNotBlank()) item { MessageBubble(ChatMessage("streaming", "assistant", state.streamingText)) }
             state.error?.let { item { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(12.dp)) } }
             item { Spacer(Modifier.height(8.dp)) }
+        }
+    }
+}
+
+@Composable
+private fun ComposerAttachmentChip(attachment: ComposerAttachment, onRemove: () -> Unit) {
+    val statusText = when (attachment.status) {
+        AttachmentUploadStatus.HASHING -> "正在校验"
+        AttachmentUploadStatus.UPLOADING -> if (attachment.size > 0) {
+            "${(attachment.uploadedBytes * 100 / attachment.size).coerceIn(0, 100)}%"
+        } else "正在上传"
+        AttachmentUploadStatus.READY -> "已就绪"
+        AttachmentUploadStatus.FAILED -> attachment.error ?: "上传失败"
+    }
+    Surface(
+        color = if (attachment.status == AttachmentUploadStatus.FAILED) MaterialTheme.colorScheme.error.copy(alpha = 0.08f) else SoftSurface,
+        shape = RoundedCornerShape(14.dp),
+        border = BorderStroke(1.dp, if (attachment.status == AttachmentUploadStatus.FAILED) MaterialTheme.colorScheme.error.copy(alpha = 0.35f) else OutlineSoft),
+        modifier = Modifier.widthIn(max = 220.dp),
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 10.dp, top = 6.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f, fill = false)) {
+                Text(attachment.name, maxLines = 1, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+                Text(statusText, maxLines = 1, style = MaterialTheme.typography.labelSmall, color = if (attachment.status == AttachmentUploadStatus.FAILED) MaterialTheme.colorScheme.error else Muted)
+            }
+            IconButton(onClick = onRemove, modifier = Modifier.size(34.dp)) {
+                Icon(Icons.Default.Close, "移除 ${attachment.name}", modifier = Modifier.size(18.dp))
+            }
         }
     }
 }

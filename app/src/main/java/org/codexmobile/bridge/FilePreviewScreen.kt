@@ -2,9 +2,21 @@ package org.codexmobile.bridge
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.ImageDecoder
+import android.graphics.drawable.AnimatedImageDrawable
+import android.graphics.drawable.Drawable
 import android.graphics.pdf.PdfRenderer
+import android.net.Uri
 import android.os.ParcelFileDescriptor
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import android.widget.ImageView
+import android.widget.MediaController
 import android.widget.Toast
+import android.widget.VideoView
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
@@ -18,6 +30,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -41,6 +54,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -48,7 +63,8 @@ import java.io.File
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun FilePreviewScreen(preview: FilePreview) {
-    if (preview.mimeType.equals("text/html", ignoreCase = true) || preview.name.endsWith(".html", ignoreCase = true) || preview.name.endsWith(".htm", ignoreCase = true)) {
+    val kind = previewKind(preview)
+    if (kind == PreviewKind.HTML) {
         HtmlBrowserScreen(preview)
         return
     }
@@ -70,15 +86,21 @@ internal fun FilePreviewScreen(preview: FilePreview) {
                     }
                 },
                 navigationIcon = { IconButton(onClick = BridgeClient::closeFilePreview) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回会话") } },
-                actions = { Button(onClick = openExternal) { Text("打开") } },
+                actions = {
+                    IconButton(onClick = openExternal) {
+                        Icon(Icons.AutoMirrored.Filled.OpenInNew, "使用其他应用打开")
+                    }
+                },
             )
         },
     ) { padding ->
         Box(Modifier.padding(padding).fillMaxSize()) {
             when {
-                preview.mimeType == "application/pdf" -> PdfPreview(file)
-                preview.mimeType.startsWith("image/") -> ImagePreview(file)
-                isTextType(preview) -> TextPreview(file, preview.line)
+                kind == PreviewKind.PDF -> PdfPreview(file)
+                kind == PreviewKind.SVG -> SvgPreview(file)
+                kind == PreviewKind.IMAGE -> ImagePreview(file)
+                kind == PreviewKind.MEDIA -> MediaPreview(preview)
+                kind == PreviewKind.TEXT -> TextPreview(file, preview.line)
                 else -> UnsupportedPreview(preview, openExternal)
             }
         }
@@ -87,14 +109,101 @@ internal fun FilePreviewScreen(preview: FilePreview) {
 
 @Composable
 private fun ImagePreview(file: File) {
-    val bitmap by produceState<Bitmap?>(null, file.absolutePath) {
-        value = withContext(Dispatchers.IO) { decodeSampledBitmap(file, 2400) }
+    val imageState by produceState<ImageLoadState>(ImageLoadState.Loading, file.absolutePath) {
+        value = withContext(Dispatchers.IO) {
+            runCatching {
+                val source = ImageDecoder.createSource(file)
+                ImageDecoder.decodeDrawable(source) { decoder, info, _ ->
+                    val largest = maxOf(info.size.width, info.size.height)
+                    if (largest > 3200) decoder.setTargetSampleSize((largest / 2400).coerceAtLeast(1))
+                    decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                }
+            }.fold(
+                onSuccess = { ImageLoadState.Ready(it) },
+                onFailure = { ImageLoadState.Failed(it.message ?: "图片解码失败") },
+            )
+        }
     }
-    if (bitmap == null) LoadingPreview() else Image(
-        bitmap = bitmap!!.asImageBitmap(),
-        contentDescription = file.name,
-        modifier = Modifier.fillMaxSize().padding(12.dp),
-        contentScale = ContentScale.Fit,
+    when (val state = imageState) {
+        ImageLoadState.Loading -> LoadingPreview()
+        is ImageLoadState.Failed -> PreviewFailure("无法预览这张图片：${state.message}")
+        is ImageLoadState.Ready -> AndroidView(
+            factory = { context ->
+                ImageView(context).apply {
+                    adjustViewBounds = true
+                    scaleType = ImageView.ScaleType.FIT_CENTER
+                    setPadding(12, 12, 12, 12)
+                }
+            },
+            update = { view ->
+                view.setImageDrawable(state.drawable)
+                (state.drawable as? AnimatedImageDrawable)?.start()
+            },
+            modifier = Modifier.fillMaxSize(),
+        )
+    }
+}
+
+private sealed interface ImageLoadState {
+    data object Loading : ImageLoadState
+    data class Ready(val drawable: Drawable) : ImageLoadState
+    data class Failed(val message: String) : ImageLoadState
+}
+
+@Composable
+private fun SvgPreview(file: File) {
+    if (file.length() > 10L * 1024L * 1024L) {
+        PreviewFailure("SVG 超过 10 MB，请使用右上角按钮交给其他应用打开。")
+        return
+    }
+    AndroidView(
+        factory = { context ->
+            WebView(context).apply {
+                settings.javaScriptEnabled = false
+                settings.allowFileAccess = false
+                settings.allowContentAccess = false
+                settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                settings.builtInZoomControls = true
+                settings.displayZoomControls = false
+                webViewClient = object : WebViewClient() {
+                    override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest): WebResourceResponse? {
+                        if (request.url.host != "codex.local" || request.url.path != "/preview.svg") return null
+                        return WebResourceResponse("image/svg+xml", "UTF-8", file.inputStream())
+                    }
+                }
+                loadDataWithBaseURL(
+                    "https://codex.local/",
+                    "<html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head><body style=\"margin:0;background:#fff;display:flex;align-items:center;justify-content:center;min-height:100vh\"><img src=\"preview.svg\" style=\"max-width:100%;max-height:100vh\"></body></html>",
+                    "text/html",
+                    "UTF-8",
+                    null,
+                )
+            }
+        },
+        onRelease = { it.destroy() },
+        modifier = Modifier.fillMaxSize(),
+    )
+}
+
+@Composable
+private fun MediaPreview(preview: FilePreview) {
+    val context = LocalContext.current
+    val file = remember(preview.localPath) { File(preview.localPath) }
+    val uri = remember(preview.localPath) {
+        FileProvider.getUriForFile(context, "${context.packageName}.files", file)
+    }
+    AndroidView(
+        factory = { appContext ->
+            VideoView(appContext).apply {
+                val controls = MediaController(appContext)
+                controls.setAnchorView(this)
+                setMediaController(controls)
+                setVideoURI(uri)
+                setOnPreparedListener { controls.show(0) }
+            }
+        },
+        onRelease = { it.stopPlayback() },
+        modifier = Modifier.fillMaxSize(),
     )
 }
 
@@ -150,10 +259,11 @@ private fun LoadingPreview() {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
 }
 
-private fun isTextType(preview: FilePreview): Boolean {
-    val extension = preview.name.substringAfterLast('.', "").lowercase()
-    return preview.mimeType.startsWith("text/") || preview.mimeType in setOf("application/json", "application/xml") ||
-        extension in setOf("md", "json", "xml", "yaml", "yml", "py", "r", "js", "mjs", "ts", "kt", "java", "sh", "log")
+@Composable
+private fun PreviewFailure(message: String) {
+    Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+        Text(message, color = MaterialTheme.colorScheme.error)
+    }
 }
 
 private fun readTextWindow(file: File, line: Int?): String {
@@ -168,14 +278,6 @@ private fun readTextWindow(file: File, line: Int?): String {
         if (count <= 0) "" else String(buffer, 0, count)
     }
     return if (file.length() > limit) "$text\n\n……手机预览只显示前 200 万字符，可使用其他应用打开完整文件。" else text
-}
-
-private fun decodeSampledBitmap(file: File, maxDimension: Int): Bitmap? {
-    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-    BitmapFactory.decodeFile(file.absolutePath, bounds)
-    var sample = 1
-    while (bounds.outWidth / sample > maxDimension || bounds.outHeight / sample > maxDimension) sample *= 2
-    return BitmapFactory.decodeFile(file.absolutePath, BitmapFactory.Options().apply { inSampleSize = sample })
 }
 
 private fun renderPdfPage(file: File, pageIndex: Int): Bitmap? {

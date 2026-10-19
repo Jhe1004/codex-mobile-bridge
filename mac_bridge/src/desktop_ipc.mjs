@@ -98,7 +98,7 @@ export class DesktopIpcClient {
     return null;
   }
 
-  async startTurn(threadId, text, clientUserMessageId = randomUUID(), knownOwnerClientId = null) {
+  async startTurn(threadId, input, clientUserMessageId = randomUUID(), knownOwnerClientId = null, attachments = []) {
     const ownerClientId = knownOwnerClientId || await this.findThreadOwner(threadId);
     if (!ownerClientId) throw new DesktopOwnerUnavailableError();
     let following = false;
@@ -118,10 +118,10 @@ export class DesktopIpcClient {
               // Desktop keeps this richer text shape in its in-memory turn state.
               // The app-server accepts plain { type, text }, but the Desktop
               // renderer also reads text_elements while rendering the turn.
-              input: [{ type: "text", text, text_elements: [] }],
+              input,
               clientUserMessageId,
             },
-            context: {},
+            context: { attachments },
           },
         },
         {
