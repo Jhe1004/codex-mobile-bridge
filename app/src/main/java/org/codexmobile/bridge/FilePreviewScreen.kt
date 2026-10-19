@@ -6,8 +6,6 @@ import android.graphics.drawable.AnimatedImageDrawable
 import android.graphics.drawable.Drawable
 import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
-import android.webkit.WebSettings
-import android.webkit.WebView
 import android.widget.ImageView
 import android.widget.MediaController
 import android.widget.Toast
@@ -67,7 +65,7 @@ import java.io.File
 @Composable
 internal fun FilePreviewScreen(preview: FilePreview) {
     val kind = previewKind(preview)
-    if (kind == PreviewKind.HTML) {
+    if (usesImmersiveBrowser(preview)) {
         HtmlBrowserScreen(preview)
         return
     }
@@ -100,7 +98,6 @@ internal fun FilePreviewScreen(preview: FilePreview) {
         Box(Modifier.padding(padding).fillMaxSize()) {
             when {
                 kind == PreviewKind.PDF -> PdfPreview(file)
-                kind == PreviewKind.SVG -> SvgPreview(file)
                 kind == PreviewKind.IMAGE -> ImagePreview(file)
                 kind == PreviewKind.MEDIA -> MediaPreview(preview)
                 kind == PreviewKind.TEXT -> TextPreview(file, preview.line)
@@ -198,70 +195,6 @@ private sealed interface ImageLoadState {
     data object Loading : ImageLoadState
     data class Ready(val drawable: Drawable) : ImageLoadState
     data class Failed(val message: String) : ImageLoadState
-}
-
-@Composable
-private fun SvgPreview(file: File) {
-    if (file.length() > SVG_PREVIEW_MAX_BYTES) {
-        PreviewFailure("SVG 超过 10 MB，请使用右上角按钮交给其他应用打开。")
-        return
-    }
-    val document by produceState<SvgLoadState>(SvgLoadState.Loading, file.absolutePath, file.lastModified()) {
-        value = withContext(Dispatchers.IO) {
-            runCatching { buildSvgPreviewHtml(file.readBytes()) }.fold(
-                onSuccess = { SvgLoadState.Ready(it) },
-                onFailure = { SvgLoadState.Failed(it.message ?: "SVG 读取失败") },
-            )
-        }
-    }
-    when (val state = document) {
-        SvgLoadState.Loading -> {
-            LoadingPreview()
-            return
-        }
-        is SvgLoadState.Failed -> {
-            PreviewFailure("无法预览这个 SVG：${state.message}")
-            return
-        }
-        is SvgLoadState.Ready -> {
-            val documentKey = "${file.absolutePath}:${file.lastModified()}"
-            AndroidView(
-                factory = { context ->
-                    WebView(context).apply {
-                        settings.javaScriptEnabled = false
-                        settings.allowFileAccess = false
-                        settings.allowContentAccess = false
-                        settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-                        settings.setSupportZoom(true)
-                        settings.builtInZoomControls = true
-                        settings.displayZoomControls = false
-                        settings.useWideViewPort = true
-                        settings.loadWithOverviewMode = true
-                    }
-                },
-                update = { view ->
-                    if (view.tag != documentKey) {
-                        view.tag = documentKey
-                        view.loadDataWithBaseURL(
-                            "https://codex.local/",
-                            state.html,
-                            "text/html",
-                            "UTF-8",
-                            null,
-                        )
-                    }
-                },
-                onRelease = { it.destroy() },
-                modifier = Modifier.fillMaxSize(),
-            )
-        }
-    }
-}
-
-private sealed interface SvgLoadState {
-    data object Loading : SvgLoadState
-    data class Ready(val html: String) : SvgLoadState
-    data class Failed(val message: String) : SvgLoadState
 }
 
 @Composable

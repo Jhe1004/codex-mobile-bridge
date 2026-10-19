@@ -60,7 +60,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import kotlinx.coroutines.delay
 import java.io.FileInputStream
 
-private const val LOCAL_HTML_HOST = "codex.local"
+private const val LOCAL_DOCUMENT_HOST = "codex.local"
 private const val CHROME_AUTO_HIDE_MS = 4_000L
 
 private fun WebView.setDocumentChromeVisible(visible: Boolean) {
@@ -68,6 +68,7 @@ private fun WebView.setDocumentChromeVisible(visible: Boolean) {
     evaluateJavascript(
         """
         (function () {
+          if (!document.head || !document.body) return;
           const hiddenClass = 'codex-mobile-browser-chrome-hidden';
           let style = document.getElementById('codex-mobile-browser-chrome-style');
           if (!style) {
@@ -111,6 +112,7 @@ private fun WebView.setDocumentChromeVisible(visible: Boolean) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun HtmlBrowserScreen(preview: FilePreview) {
+    val documentPolicy = remember(preview.localPath, preview.mimeType) { browserDocumentPolicy(preview) }
     var webView by remember(preview.localPath) { mutableStateOf<WebView?>(null) }
     var canGoBack by remember { mutableStateOf(false) }
     var canGoForward by remember { mutableStateOf(false) }
@@ -123,7 +125,7 @@ internal fun HtmlBrowserScreen(preview: FilePreview) {
     val window = (view.context as? Activity)?.window
     val mainDocumentPath = remember(preview.localPath) { "/${Uri.encode(preview.name)}" }
     val mainDocumentUrl = remember(mainDocumentPath, preview.fragment) {
-        "https://$LOCAL_HTML_HOST$mainDocumentPath" +
+        "https://$LOCAL_DOCUMENT_HOST$mainDocumentPath" +
             preview.fragment?.let { "#${Uri.encode(it)}" }.orEmpty()
     }
 
@@ -280,14 +282,16 @@ internal fun HtmlBrowserScreen(preview: FilePreview) {
                         false
                     }
                     WebView.setWebContentsDebuggingEnabled(false)
-                    settings.javaScriptEnabled = true
-                    settings.domStorageEnabled = true
+                    settings.javaScriptEnabled = documentPolicy.javaScriptEnabled
+                    settings.domStorageEnabled = documentPolicy.javaScriptEnabled
                     settings.allowFileAccess = false
                     settings.allowContentAccess = false
                     settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
                     settings.setSupportZoom(true)
                     settings.builtInZoomControls = true
                     settings.displayZoomControls = false
+                    settings.useWideViewPort = documentPolicy.fitDocumentOnFirstLoad
+                    settings.loadWithOverviewMode = documentPolicy.fitDocumentOnFirstLoad
                     settings.cacheMode = WebSettings.LOAD_DEFAULT
                     setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
                     webChromeClient = object : WebChromeClient() {
@@ -304,7 +308,7 @@ internal fun HtmlBrowserScreen(preview: FilePreview) {
                         override fun doUpdateVisitedHistory(view: WebView?, url: String?, isReload: Boolean) = updateNavigation(view)
 
                         override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                            if (!request.isForMainFrame || request.url.host != LOCAL_HTML_HOST) return false
+                            if (!request.isForMainFrame || request.url.host != LOCAL_DOCUMENT_HOST) return false
                             if (request.url.encodedPath == mainDocumentPath) return false
                             if (!request.url.fragment.isNullOrBlank() && request.url.encodedPath == Uri.parse(view.url).encodedPath) return false
                             val target = BridgeClient.resolveHtmlTarget(preview.sourcePath, request.url.encodedPath ?: "/", navigation = true)
@@ -314,9 +318,9 @@ internal fun HtmlBrowserScreen(preview: FilePreview) {
                         }
 
                         override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest): WebResourceResponse? {
-                            if (request.url.host != LOCAL_HTML_HOST) return null
+                            if (request.url.host != LOCAL_DOCUMENT_HOST) return null
                             if (request.url.encodedPath == mainDocumentPath) {
-                                return WebResourceResponse("text/html", "UTF-8", FileInputStream(preview.localPath))
+                                return WebResourceResponse(documentPolicy.mimeType, documentPolicy.encoding, FileInputStream(preview.localPath))
                             }
                             val resource = BridgeClient.fetchHtmlResourceBlocking(preview.sourcePath, request.url.encodedPath ?: "/") ?: return null
                             val encoding = if (resource.mimeType.startsWith("text/") || resource.mimeType.contains("javascript") || resource.mimeType.contains("json")) "UTF-8" else null
