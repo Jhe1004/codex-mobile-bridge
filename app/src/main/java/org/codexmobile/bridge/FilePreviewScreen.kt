@@ -1,24 +1,20 @@
 package org.codexmobile.bridge
 
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
 import android.graphics.drawable.AnimatedImageDrawable
 import android.graphics.drawable.Drawable
 import android.graphics.pdf.PdfRenderer
-import android.net.Uri
 import android.os.ParcelFileDescriptor
-import android.webkit.WebResourceRequest
-import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
-import android.webkit.WebViewClient
 import android.widget.ImageView
 import android.widget.MediaController
 import android.widget.Toast
 import android.widget.VideoView
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -42,14 +38,21 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -127,7 +130,45 @@ private fun ImagePreview(file: File) {
     when (val state = imageState) {
         ImageLoadState.Loading -> LoadingPreview()
         is ImageLoadState.Failed -> PreviewFailure("无法预览这张图片：${state.message}")
-        is ImageLoadState.Ready -> AndroidView(
+        is ImageLoadState.Ready -> ZoomableImageView(state.drawable, file.absolutePath)
+    }
+}
+
+@Composable
+private fun ZoomableImageView(drawable: Drawable, imageKey: String) {
+    var scale by remember(imageKey) { mutableFloatStateOf(1f) }
+    var offset by remember(imageKey) { mutableStateOf(Offset.Zero) }
+    var viewportWidth by remember(imageKey) { mutableFloatStateOf(0f) }
+    var viewportHeight by remember(imageKey) { mutableFloatStateOf(0f) }
+
+    fun clampOffset(candidate: Offset, candidateScale: Float): Offset {
+        if (candidateScale <= 1f) return Offset.Zero
+        val maxX = viewportWidth * (candidateScale - 1f) / 2f
+        val maxY = viewportHeight * (candidateScale - 1f) / 2f
+        return Offset(
+            candidate.x.coerceIn(-maxX, maxX),
+            candidate.y.coerceIn(-maxY, maxY),
+        )
+    }
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .clipToBounds()
+            .onSizeChanged {
+                viewportWidth = it.width.toFloat()
+                viewportHeight = it.height.toFloat()
+                offset = clampOffset(offset, scale)
+            }
+            .pointerInput(imageKey) {
+                detectTransformGestures { _, pan, zoom, _ ->
+                    val nextScale = (scale * zoom).coerceIn(1f, 8f)
+                    scale = nextScale
+                    offset = clampOffset(offset + pan, nextScale)
+                }
+            },
+    ) {
+        AndroidView(
             factory = { context ->
                 ImageView(context).apply {
                     adjustViewBounds = true
@@ -136,10 +177,19 @@ private fun ImagePreview(file: File) {
                 }
             },
             update = { view ->
-                view.setImageDrawable(state.drawable)
-                (state.drawable as? AnimatedImageDrawable)?.start()
+                if (view.drawable !== drawable) {
+                    view.setImageDrawable(drawable)
+                    (drawable as? AnimatedImageDrawable)?.start()
+                }
             },
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    scaleX = scale
+                    scaleY = scale
+                    translationX = offset.x
+                    translationY = offset.y
+                },
         )
     }
 }
@@ -152,37 +202,66 @@ private sealed interface ImageLoadState {
 
 @Composable
 private fun SvgPreview(file: File) {
-    if (file.length() > 10L * 1024L * 1024L) {
+    if (file.length() > SVG_PREVIEW_MAX_BYTES) {
         PreviewFailure("SVG 超过 10 MB，请使用右上角按钮交给其他应用打开。")
         return
     }
-    AndroidView(
-        factory = { context ->
-            WebView(context).apply {
-                settings.javaScriptEnabled = false
-                settings.allowFileAccess = false
-                settings.allowContentAccess = false
-                settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-                settings.builtInZoomControls = true
-                settings.displayZoomControls = false
-                webViewClient = object : WebViewClient() {
-                    override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest): WebResourceResponse? {
-                        if (request.url.host != "codex.local" || request.url.path != "/preview.svg") return null
-                        return WebResourceResponse("image/svg+xml", "UTF-8", file.inputStream())
+    val document by produceState<SvgLoadState>(SvgLoadState.Loading, file.absolutePath, file.lastModified()) {
+        value = withContext(Dispatchers.IO) {
+            runCatching { buildSvgPreviewHtml(file.readBytes()) }.fold(
+                onSuccess = { SvgLoadState.Ready(it) },
+                onFailure = { SvgLoadState.Failed(it.message ?: "SVG 读取失败") },
+            )
+        }
+    }
+    when (val state = document) {
+        SvgLoadState.Loading -> {
+            LoadingPreview()
+            return
+        }
+        is SvgLoadState.Failed -> {
+            PreviewFailure("无法预览这个 SVG：${state.message}")
+            return
+        }
+        is SvgLoadState.Ready -> {
+            val documentKey = "${file.absolutePath}:${file.lastModified()}"
+            AndroidView(
+                factory = { context ->
+                    WebView(context).apply {
+                        settings.javaScriptEnabled = false
+                        settings.allowFileAccess = false
+                        settings.allowContentAccess = false
+                        settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                        settings.setSupportZoom(true)
+                        settings.builtInZoomControls = true
+                        settings.displayZoomControls = false
+                        settings.useWideViewPort = true
+                        settings.loadWithOverviewMode = true
                     }
-                }
-                loadDataWithBaseURL(
-                    "https://codex.local/",
-                    "<html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head><body style=\"margin:0;background:#fff;display:flex;align-items:center;justify-content:center;min-height:100vh\"><img src=\"preview.svg\" style=\"max-width:100%;max-height:100vh\"></body></html>",
-                    "text/html",
-                    "UTF-8",
-                    null,
-                )
-            }
-        },
-        onRelease = { it.destroy() },
-        modifier = Modifier.fillMaxSize(),
-    )
+                },
+                update = { view ->
+                    if (view.tag != documentKey) {
+                        view.tag = documentKey
+                        view.loadDataWithBaseURL(
+                            "https://codex.local/",
+                            state.html,
+                            "text/html",
+                            "UTF-8",
+                            null,
+                        )
+                    }
+                },
+                onRelease = { it.destroy() },
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+    }
+}
+
+private sealed interface SvgLoadState {
+    data object Loading : SvgLoadState
+    data class Ready(val html: String) : SvgLoadState
+    data class Failed(val message: String) : SvgLoadState
 }
 
 @Composable
