@@ -658,9 +658,14 @@ object BridgeClient {
         val threadId = _state.value.selectedThread?.id ?: return
         if (_state.value.fileTransfer != null) return
         val context = requireNotNull(appContext)
+        val requestTarget = parseFileRequestTarget(target)
+        if (requestTarget.path.isBlank()) return
         if (!forceRefresh) {
-            FilePreviewCache.find(context, threadId, target)?.let { cached ->
-                _state.value = _state.value.copy(filePreview = cached, error = null)
+            FilePreviewCache.find(context, threadId, requestTarget.path)?.let { cached ->
+                _state.value = _state.value.copy(
+                    filePreview = cached.copy(fragment = requestTarget.fragment),
+                    error = null,
+                )
                 return
             }
         }
@@ -670,7 +675,7 @@ object BridgeClient {
             fileTransfer = FileTransferState("正在读取文件信息…", 0, 0),
             error = null,
         )
-        val payload = JSONObject().put("threadId", threadId).put("path", target)
+        val payload = JSONObject().put("threadId", threadId).put("path", requestTarget.path)
         request("file.stat", payload, onError = { failFileTransfer(transferId, it) }) { result ->
             if (activeTransferId != transferId) return@request
             val meta = FileMetadata(
@@ -685,15 +690,31 @@ object BridgeClient {
             val directory = FilePreviewCache.directory(context)
             val destination = File(directory, cacheFileName(meta.sha256, meta.name))
             findVerifiedCachedFile(directory, destination, meta)?.let { cachedFile ->
-                publishFilePreview(threadId, target, meta, cachedFile)
+                publishFilePreview(threadId, requestTarget.path, requestTarget.fragment, meta, cachedFile)
                 return@request
             }
             if (destination.exists()) destination.delete()
             destination.createNewFile()
             activeTransferFile = destination
             _state.value = _state.value.copy(fileTransfer = FileTransferState(meta.name, 0, meta.size))
-            if (meta.size == 0L) finishFileTransfer(transferId, threadId, target, meta, destination, MessageDigest.getInstance("SHA-256"))
-            else fetchFileChunk(transferId, threadId, target, meta, destination, 0L, MessageDigest.getInstance("SHA-256"))
+            if (meta.size == 0L) finishFileTransfer(
+                transferId,
+                threadId,
+                requestTarget.path,
+                requestTarget.fragment,
+                meta,
+                destination,
+                MessageDigest.getInstance("SHA-256"),
+            ) else fetchFileChunk(
+                transferId,
+                threadId,
+                requestTarget.path,
+                requestTarget.fragment,
+                meta,
+                destination,
+                0L,
+                MessageDigest.getInstance("SHA-256"),
+            )
         }
     }
 
@@ -703,7 +724,7 @@ object BridgeClient {
 
     fun refreshFilePreview() {
         val preview = _state.value.filePreview ?: return
-        downloadFile(preview.sourcePath, forceRefresh = true)
+        downloadFile(preview.sourcePath + preview.fragment?.let { "#$it" }.orEmpty(), forceRefresh = true)
     }
 
     /**
@@ -787,6 +808,7 @@ object BridgeClient {
         transferId: String,
         threadId: String,
         target: String,
+        fragment: String?,
         meta: FileMetadata,
         destination: File,
         offset: Long,
@@ -807,9 +829,9 @@ object BridgeClient {
             val nextOffset = result.getLong("nextOffset")
             _state.value = _state.value.copy(fileTransfer = FileTransferState(meta.name, nextOffset, meta.size))
             if (result.optBoolean("done") || nextOffset >= meta.size) {
-                finishFileTransfer(transferId, threadId, target, meta, destination, digest)
+                finishFileTransfer(transferId, threadId, target, fragment, meta, destination, digest)
             } else {
-                fetchFileChunk(transferId, threadId, target, meta, destination, nextOffset, digest)
+                fetchFileChunk(transferId, threadId, target, fragment, meta, destination, nextOffset, digest)
             }
         }
     }
@@ -818,6 +840,7 @@ object BridgeClient {
         transferId: String,
         threadId: String,
         requestedTarget: String,
+        fragment: String?,
         meta: FileMetadata,
         destination: File,
         digest: MessageDigest,
@@ -829,12 +852,13 @@ object BridgeClient {
             failFileTransfer(transferId, "文件完整性校验失败，请重新点击链接")
             return
         }
-        publishFilePreview(threadId, requestedTarget, meta, destination)
+        publishFilePreview(threadId, requestedTarget, fragment, meta, destination)
     }
 
     private fun publishFilePreview(
         threadId: String,
         requestedTarget: String,
+        fragment: String?,
         meta: FileMetadata,
         file: File,
     ) {
@@ -848,6 +872,7 @@ object BridgeClient {
             mimeType = meta.mimeType,
             size = meta.size,
             line = meta.line,
+            fragment = fragment,
         )
         appContext?.let { context ->
             FilePreviewCache.store(context, threadId, requestedTarget, preview, meta.sha256, meta.mtimeMs)

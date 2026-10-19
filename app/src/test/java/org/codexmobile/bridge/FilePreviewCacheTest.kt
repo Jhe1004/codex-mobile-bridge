@@ -29,4 +29,20 @@ class FilePreviewCacheTest {
 
         assertTrue(name.toByteArray(Charsets.UTF_8).size <= 225)
     }
+
+    @Test
+    fun fileTargetSeparatesHtmlFragmentFromMacPath() {
+        val target = parseFileRequestTarget("/project/report.html#hyde_null")
+
+        assertEquals("/project/report.html", target.path)
+        assertEquals("hyde_null", target.fragment)
+    }
+
+    @Test
+    fun fileTargetLeavesOrdinaryPathUnchanged() {
+        val target = parseFileRequestTarget("/project/report.html")
+
+        assertEquals("/project/report.html", target.path)
+        assertEquals(null, target.fragment)
+    }
 }

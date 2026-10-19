@@ -12,6 +12,17 @@ private const val MAX_CACHE_BYTES = 512L * 1024L * 1024L
 internal fun stableCacheKey(threadId: String, target: String): String =
     sha256Hex("$threadId\n$target".toByteArray(Charsets.UTF_8))
 
+internal data class FileRequestTarget(val path: String, val fragment: String?)
+
+internal fun parseFileRequestTarget(target: String): FileRequestTarget {
+    val marker = target.indexOf('#')
+    if (marker < 0) return FileRequestTarget(target, null)
+    return FileRequestTarget(
+        path = target.substring(0, marker),
+        fragment = target.substring(marker + 1).takeIf { it.isNotBlank() },
+    )
+}
+
 internal fun cacheFileName(sha256: String, originalName: String): String {
     val safeName = truncateUtf8(
         originalName

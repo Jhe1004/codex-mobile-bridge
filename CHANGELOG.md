@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.20.1 - 2026-10-19
+
+- 修复带页内定位符的本地 HTML 链接：下载前会把 `#fragment` 与真实 Mac 文件路径分开，避免把定位符误当成文件名。
+- 打开网页后仍保留原来的页内定位，缓存命中和手动重新下载时也不会丢失定位。
+
 ## 0.20.0 - 2026-10-19
 
 - Turn the home-screen heartbeat button into a manual verification of every conversation active within the last 24 hours.

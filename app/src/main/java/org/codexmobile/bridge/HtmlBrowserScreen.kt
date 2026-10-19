@@ -122,7 +122,10 @@ internal fun HtmlBrowserScreen(preview: FilePreview) {
     val context = LocalContext.current
     val window = (view.context as? Activity)?.window
     val mainDocumentPath = remember(preview.localPath) { "/${Uri.encode(preview.name)}" }
-    val mainDocumentUrl = remember(mainDocumentPath) { "https://$LOCAL_HTML_HOST$mainDocumentPath" }
+    val mainDocumentUrl = remember(mainDocumentPath, preview.fragment) {
+        "https://$LOCAL_HTML_HOST$mainDocumentPath" +
+            preview.fragment?.let { "#${Uri.encode(it)}" }.orEmpty()
+    }
 
     val revealChrome = {
         chromeVisible = true

@@ -120,6 +120,7 @@ data class FilePreview(
     val mimeType: String,
     val size: Long,
     val line: Int? = null,
+    val fragment: String? = null,
 )
 
 data class BridgeUiState(
