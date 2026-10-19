@@ -295,6 +295,61 @@ object BridgeClient {
                 refreshSelectedThread(showSyncing = true)
             }
         }
+        prepareSelectedThread()
+    }
+
+    private fun prepareSelectedThread() {
+        val current = _state.value
+        val threadId = current.selectedThread?.id ?: return
+        if (!current.relayConnected || !current.macConnected || !current.appServerReady ||
+            current.activeTurnId != null || current.sendPending ||
+            current.preparedThreadId == threadId || current.preparingThreadId == threadId
+        ) return
+
+        _state.value = current.copy(
+            preparingThreadId = threadId,
+            preparedThreadId = null,
+            error = null,
+        )
+        request(
+            "thread.prepare",
+            JSONObject().put("threadId", threadId),
+            onError = { message ->
+                _state.update { latest ->
+                    if (latest.selectedThread?.id != threadId) latest else latest.copy(
+                        preparingThreadId = null,
+                        preparedThreadId = null,
+                        error = "会话尚未准备好：$message",
+                    )
+                }
+            },
+        ) { result ->
+            _state.update { latest ->
+                if (latest.selectedThread?.id != threadId ||
+                    !latest.relayConnected || !latest.macConnected || !latest.appServerReady ||
+                    !result.optBoolean("ready")
+                ) latest else latest.copy(
+                    preparingThreadId = null,
+                    preparedThreadId = threadId,
+                    error = null,
+                )
+            }
+        }
+    }
+
+    private fun updateAppServerReadiness(ready: Boolean) {
+        val previous = _state.value.appServerReady
+        _state.update { current ->
+            current.copy(
+                appServerReady = ready,
+                preparingThreadId = if (ready) current.preparingThreadId else null,
+                preparedThreadId = if (ready) current.preparedThreadId else null,
+            )
+        }
+        if (ready && !previous) {
+            refreshSelectedThread(showSyncing = true)
+            prepareSelectedThread()
+        }
     }
 
     fun refreshSelectedThread(showSyncing: Boolean = false) {
@@ -381,6 +436,7 @@ object BridgeClient {
                 conversationContentState = ConversationContentState.LIVE,
                 loadedContentRevision = summary.contentRevision,
             )
+            prepareSelectedThread()
             refreshThreads()
         }
     }
@@ -392,7 +448,7 @@ object BridgeClient {
         val readyAttachments = attachments.filter { it.status == AttachmentUploadStatus.READY && it.remoteUploadId != null }
         if ((trimmed.isBlank() && readyAttachments.isEmpty()) ||
             attachments.any { it.status != AttachmentUploadStatus.READY } ||
-            _state.value.sendPending || _state.value.activeTurnId != null
+            conversationSendReadiness(_state.value) != ConversationSendReadiness.READY
         ) return
         val attachmentSummary = readyAttachments.joinToString("\n") { "- ${it.name}" }
         val visibleText = when {
@@ -427,15 +483,26 @@ object BridgeClient {
                 .put("attachmentIds", JSONArray(readyAttachments.mapNotNull { it.remoteUploadId })),
             onError = { message ->
                 val current = _state.value
+                val ambiguousDelivery = deliveryFailureIsAmbiguous(message)
                 _state.value = current.copy(
-                    messages = current.messages.filterNot { it.clientId == clientUserMessageId },
-                    pendingOutgoing = current.pendingOutgoing?.takeUnless {
-                        it.message.clientId == clientUserMessageId
+                    messages = if (ambiguousDelivery) {
+                        current.messages.map { existing ->
+                            if (existing.clientId == clientUserMessageId) {
+                                existing.copy(detail = "发送状态未知，正在重新核对…")
+                            } else existing
+                        }
+                    } else {
+                        current.messages.filterNot { it.clientId == clientUserMessageId }
+                    },
+                    pendingOutgoing = if (ambiguousDelivery) current.pendingOutgoing else {
+                        current.pendingOutgoing?.takeUnless { it.message.clientId == clientUserMessageId }
                     },
                     sendPending = false,
                     preparingThreadId = null,
                     preparedThreadId = null,
-                    error = message,
+                    error = if (ambiguousDelivery) {
+                        "$message；消息不会从手机消失，重新连接后将自动核对是否送达"
+                    } else message,
                 )
             },
         ) { result ->
@@ -925,7 +992,7 @@ object BridgeClient {
                         break
                     }
                     request("status", JSONObject(), onError = {}) { result ->
-                        _state.value = _state.value.copy(appServerReady = result.optBoolean("appServerReady"))
+                        updateAppServerReadiness(result.optBoolean("appServerReady"))
                         refreshRecentThreads()
                     }
                 }
@@ -986,7 +1053,13 @@ object BridgeClient {
             }
 
             override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
-                _state.value = _state.value.copy(connection = "连接失败", relayConnected = false, error = t.message)
+                _state.value = _state.value.copy(
+                    connection = "连接失败",
+                    relayConnected = false,
+                    preparingThreadId = null,
+                    preparedThreadId = null,
+                    error = t.message,
+                )
                 webSocket = null
             }
 
@@ -1029,20 +1102,24 @@ object BridgeClient {
                 manualSyncInProgress = false,
             )
         }
+        _state.value = _state.value.copy(appServerReady = false)
         transportErrors.forEach { it("连接中断") }
         if (_state.value.sendPending) {
             val current = _state.value
             val pendingOutgoing = current.pendingOutgoing
             _state.value = current.copy(
-                messages = if (pendingOutgoing == null) current.messages else {
-                    current.messages.filterNot { it.clientId == pendingOutgoing.message.clientId }
+                messages = if (pendingOutgoing == null) current.messages else current.messages.map { message ->
+                    if (message.clientId == pendingOutgoing.message.clientId) {
+                        message.copy(detail = "连接中断，正在确认是否送达…")
+                    } else message
                 },
-                pendingOutgoing = null,
                 sendPending = false,
                 preparingThreadId = null,
                 preparedThreadId = null,
-                error = "连接中断，消息尚未发送，请重试",
+                error = "连接中断，正在重新核对消息是否已经送达",
             )
+        } else {
+            _state.value = _state.value.copy(preparingThreadId = null, preparedThreadId = null)
         }
         if (activeTransferId != null) {
             activeTransferId = null
@@ -1109,17 +1186,21 @@ object BridgeClient {
                 _state.value = _state.value.copy(macConnected = mac, connection = if (mac) "已连接" else "Mac 离线")
                 refreshThreads()
                 request("status", JSONObject()) { result ->
-                    _state.value = _state.value.copy(appServerReady = result.optBoolean("appServerReady"))
+                    updateAppServerReadiness(result.optBoolean("appServerReady"))
                     refreshRecentThreads()
                 }
             }
             "relay.status" -> {
                 val wasConnected = _state.value.macConnected
                 val macConnected = message.optBoolean("macConnected")
-                _state.value = _state.value.copy(macConnected = macConnected)
+                _state.value = _state.value.copy(
+                    macConnected = macConnected,
+                    preparingThreadId = if (macConnected) _state.value.preparingThreadId else null,
+                    preparedThreadId = if (macConnected) _state.value.preparedThreadId else null,
+                )
                 if (macConnected && !wasConnected) {
                     request("status", JSONObject(), onError = {}) { result ->
-                        _state.value = _state.value.copy(appServerReady = result.optBoolean("appServerReady"))
+                        updateAppServerReadiness(result.optBoolean("appServerReady"))
                         refreshRecentThreads()
                     }
                 }
@@ -1137,7 +1218,7 @@ object BridgeClient {
             }
             "event" -> handleEvent(message.optString("event"), message.optJSONObject("data") ?: JSONObject())
             "status" -> if (message.optString("component") == "app-server") {
-                _state.value = _state.value.copy(appServerReady = message.optBoolean("ok"))
+                updateAppServerReadiness(message.optBoolean("ok"))
             }
         }
     }
@@ -1438,6 +1519,7 @@ object BridgeClient {
                 loadedContentRevision = revision.ifBlank { _state.value.loadedContentRevision },
                 error = null,
             )
+            prepareSelectedThread()
             return
         }
         val messages = chatMessages(requestedThreadId, result.optJSONArray("messages") ?: JSONArray())
@@ -1454,9 +1536,11 @@ object BridgeClient {
             },
             conversationContentState = ConversationContentState.LIVE,
             loadedContentRevision = revision,
+            sendPending = false,
             error = null,
         )
         persistConversation(selectedThread, merged.messages)
+        prepareSelectedThread()
     }
 
     private fun chatMessages(threadId: String, array: JSONArray): List<ChatMessage> = buildList {

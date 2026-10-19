@@ -14,6 +14,46 @@ enum class ConversationContentState {
     LIVE,
 }
 
+enum class ConversationSendReadiness {
+    READY,
+    NO_THREAD,
+    RELAY_OFFLINE,
+    MAC_OFFLINE,
+    CODEX_NOT_READY,
+    CONTENT_NOT_SYNCED,
+    THREAD_PREPARING,
+    THREAD_NOT_PREPARED,
+    DELIVERY_UNCONFIRMED,
+    TURN_RUNNING,
+    SEND_PENDING,
+}
+
+internal fun conversationSendReadiness(state: BridgeUiState): ConversationSendReadiness {
+    val thread = state.selectedThread ?: return ConversationSendReadiness.NO_THREAD
+    return when {
+        !state.relayConnected -> ConversationSendReadiness.RELAY_OFFLINE
+        !state.macConnected -> ConversationSendReadiness.MAC_OFFLINE
+        !state.appServerReady -> ConversationSendReadiness.CODEX_NOT_READY
+        state.conversationContentState != ConversationContentState.LIVE -> ConversationSendReadiness.CONTENT_NOT_SYNCED
+        state.preparingThreadId == thread.id -> ConversationSendReadiness.THREAD_PREPARING
+        state.preparedThreadId != thread.id -> ConversationSendReadiness.THREAD_NOT_PREPARED
+        state.pendingOutgoing != null -> ConversationSendReadiness.DELIVERY_UNCONFIRMED
+        state.sendPending -> ConversationSendReadiness.SEND_PENDING
+        state.activeTurnId != null || thread.activity == ThreadActivity.RUNNING -> ConversationSendReadiness.TURN_RUNNING
+        else -> ConversationSendReadiness.READY
+    }
+}
+
+internal fun deliveryFailureIsAmbiguous(message: String): Boolean {
+    val normalized = message.lowercase()
+    return normalized.contains("连接中断") ||
+        normalized.contains("请求超时") ||
+        normalized.contains("timeout") ||
+        normalized.contains("timed out") ||
+        normalized.contains("connection reset") ||
+        normalized.contains("broken pipe")
+}
+
 internal fun displayedThreadActivity(
     runtimeActivity: ThreadActivity,
     completionRevision: String,

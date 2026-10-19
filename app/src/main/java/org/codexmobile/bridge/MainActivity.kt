@@ -558,13 +558,23 @@ private fun ChatScreen(state: BridgeUiState) {
     }
     val listState = rememberLazyListState()
     val threadId = state.selectedThread?.id
+    val sendReadiness = conversationSendReadiness(state)
+    val sessionReadyToSend = sendReadiness == ConversationSendReadiness.READY
+    val composerHint = when (sendReadiness) {
+        ConversationSendReadiness.READY -> "询问 Codex"
+        ConversationSendReadiness.DELIVERY_UNCONFIRMED,
+        ConversationSendReadiness.SEND_PENDING -> "正在确认上一条消息…"
+        ConversationSendReadiness.TURN_RUNNING -> "等待当前回复完成…"
+        else -> "会话准备完成后可发送"
+    }
     val threadStatus = when {
         !state.relayConnected || !state.macConnected -> state.connection
-        state.preparingThreadId == threadId -> "正在连接会话以发送…"
         state.conversationContentState == ConversationContentState.LOADING_CACHE -> "正在读取本地记录…"
         state.conversationContentState == ConversationContentState.SYNCING -> "正在检查新内容…"
-        state.conversationContentState == ConversationContentState.CACHED_CURRENT -> "会话已同步 · 本地缓存"
-        state.conversationContentState == ConversationContentState.LIVE -> "会话已同步"
+        state.conversationContentState == ConversationContentState.CACHED_CURRENT -> "正在核对本地记录…"
+        state.preparingThreadId == threadId -> "正在准备会话…"
+        sessionReadyToSend -> "会话已就绪"
+        state.conversationContentState == ConversationContentState.LIVE -> "等待会话准备…"
         else -> state.connection
     }
     val hasStreamingMessage = state.streamingText.isNotBlank()
@@ -634,7 +644,12 @@ private fun ChatScreen(state: BridgeUiState) {
                                 value = input,
                                 onValueChange = { input = it },
                                 modifier = Modifier.weight(1f),
-                                placeholder = { Text("询问 Codex", color = Color(0xFF9A9A9A)) },
+                                placeholder = {
+                                    Text(
+                                        composerHint,
+                                        color = Color(0xFF9A9A9A),
+                                    )
+                                },
                                 shape = RoundedCornerShape(24.dp),
                                 maxLines = 6,
                                 colors = OutlinedTextFieldDefaults.colors(
@@ -648,7 +663,7 @@ private fun ChatScreen(state: BridgeUiState) {
                             val attachmentsReady = state.composerAttachments.isNotEmpty() &&
                                 state.composerAttachments.all { it.status == AttachmentUploadStatus.READY }
                             val canSend = (input.isNotBlank() || attachmentsReady) &&
-                                state.activeTurnId == null && !state.sendPending &&
+                                sessionReadyToSend &&
                                 state.composerAttachments.none { it.status != AttachmentUploadStatus.READY }
                             IconButton(
                                 onClick = { BridgeClient.send(input) { input = "" } },
