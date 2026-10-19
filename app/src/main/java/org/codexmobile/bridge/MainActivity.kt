@@ -198,6 +198,7 @@ private fun HeartbeatStatusIndicator(state: BridgeUiState, onClick: () -> Unit) 
 
     IconButton(
         onClick = onClick,
+        enabled = !state.manualSyncInProgress,
         modifier = Modifier.semantics { contentDescription = "$description，点击刷新" },
     ) {
         Canvas(Modifier.size(30.dp)) {
@@ -228,6 +229,46 @@ private fun HeartbeatStatusIndicator(state: BridgeUiState, onClick: () -> Unit) 
                 radius = 2.2.dp.toPx(),
                 center = center,
                 alpha = visiblePulse,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ManualSyncProgress(state: BridgeUiState) {
+    if (!state.manualSyncVisible) return
+    val total = state.manualSyncTotal
+    val completed = state.manualSyncCompleted.coerceAtMost(total.coerceAtLeast(0))
+    val label = when {
+        state.manualSyncInProgress && total <= 0 -> "正在准备核对最近 24 小时会话…"
+        state.manualSyncInProgress -> "正在同步 $completed / $total"
+        state.manualSyncFailed > 0 -> "已核对 $total 个会话，${state.manualSyncFailed} 个将自动重试"
+        else -> "同步完成：已核对 $total 个，更新 ${state.manualSyncChanged} 个"
+    }
+    Column(
+        modifier = Modifier.fillMaxWidth().background(Paper).padding(horizontal = 18.dp, vertical = 7.dp),
+    ) {
+        Text(label, style = MaterialTheme.typography.labelMedium, color = Muted)
+        Spacer(Modifier.height(6.dp))
+        if (total > 0) {
+            LinearProgressIndicator(
+                progress = { completed.toFloat() / total.toFloat() },
+                modifier = Modifier.fillMaxWidth(),
+                color = Accent,
+                trackColor = SoftSurfaceStrong,
+            )
+        } else if (state.manualSyncInProgress) {
+            LinearProgressIndicator(
+                modifier = Modifier.fillMaxWidth(),
+                color = Accent,
+                trackColor = SoftSurfaceStrong,
+            )
+        } else {
+            LinearProgressIndicator(
+                progress = { 1f },
+                modifier = Modifier.fillMaxWidth(),
+                color = Accent,
+                trackColor = SoftSurfaceStrong,
             )
         }
     }
@@ -352,12 +393,15 @@ private fun ProjectTreeScreen(state: BridgeUiState, onBatterySettings: () -> Uni
     Scaffold(
         containerColor = Paper,
         topBar = {
-            TopAppBar(
-                title = { Column { Text("Codex", fontWeight = FontWeight.SemiBold, color = Ink); Text(state.connection, style = MaterialTheme.typography.labelSmall, color = if (state.relayConnected && state.macConnected) Accent else Muted) } },
-                actions = {
-                    HeartbeatStatusIndicator(state, onClick = BridgeClient::refreshHome)
-                },
-            )
+            Column {
+                TopAppBar(
+                    title = { Column { Text("Codex", fontWeight = FontWeight.SemiBold, color = Ink); Text(state.connection, style = MaterialTheme.typography.labelSmall, color = if (state.relayConnected && state.macConnected) Accent else Muted) } },
+                    actions = {
+                        HeartbeatStatusIndicator(state, onClick = BridgeClient::refreshHome)
+                    },
+                )
+                ManualSyncProgress(state)
+            }
         },
     ) { padding ->
         LazyColumn(modifier = Modifier.padding(padding).fillMaxSize()) {

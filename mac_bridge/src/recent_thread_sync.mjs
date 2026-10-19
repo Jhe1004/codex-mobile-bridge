@@ -40,30 +40,52 @@ export async function syncRecentlyActiveThreads(rpc, threads, {
   windowMs = RECENT_THREAD_WINDOW_MS,
   limit = 120,
   concurrency = RECENT_THREAD_SYNC_CONCURRENCY,
+  onProgress = null,
 } = {}) {
   const selected = selectRecentlyActiveThreads(threads, { nowMs, windowMs });
-  const data = await mapWithConcurrency(selected, concurrency, async (thread) => {
+  let completedCount = 0;
+  let failedCount = 0;
+  let changedCount = 0;
+  function reportProgress() {
+    if (typeof onProgress !== "function") return;
     try {
-      return await syncLatestVisibleMessages(
+      onProgress({
+        completedCount,
+        totalCount: selected.length,
+        failedCount,
+        changedCount,
+      });
+    } catch {}
+  }
+  reportProgress();
+  const data = await mapWithConcurrency(selected, concurrency, async (thread) => {
+    let entry;
+    try {
+      entry = await syncLatestVisibleMessages(
         rpc,
         thread.id,
         getSourceThread(thread),
         { knownRevision: String(knownRevisions[thread.id] ?? ""), limit },
       );
     } catch (error) {
-      return {
+      entry = {
         threadId: thread.id,
         failed: true,
         error: error instanceof Error ? error.message : String(error),
       };
     }
+    completedCount += 1;
+    if (entry.failed) failedCount += 1;
+    else if (!entry.notModified) changedCount += 1;
+    reportProgress();
+    return entry;
   });
   return {
     checkedAt: new Date(nowMs).toISOString(),
     windowMs,
     checkedCount: selected.length,
-    changedCount: data.filter((entry) => !entry.failed && !entry.notModified).length,
-    failedCount: data.filter((entry) => entry.failed).length,
+    changedCount,
+    failedCount,
     data,
   };
 }

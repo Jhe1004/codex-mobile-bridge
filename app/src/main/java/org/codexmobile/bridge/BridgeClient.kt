@@ -66,7 +66,9 @@ object BridgeClient {
     private val cancelledAttachmentIds = ConcurrentHashMap.newKeySet<String>()
     private val latestSyncInFlight = ConcurrentHashMap.newKeySet<String>()
     private val recentSyncInFlight = AtomicBoolean(false)
+    private val manualSyncQueued = AtomicBoolean(false)
     private val selectedCacheGeneration = AtomicLong(0)
+    @Volatile private var manualSyncId: String? = null
     @Volatile private var conversationCache: ConversationCacheStore? = null
     @Volatile private var activeTransferId: String? = null
     @Volatile private var activeTransferFile: File? = null
@@ -108,14 +110,45 @@ object BridgeClient {
         parseThreads(result)
     }
 
-    fun refreshRecentThreads() {
+    fun refreshRecentThreads(manual: Boolean = false) {
         val current = _state.value
-        if (!current.relayConnected || !current.macConnected || !current.appServerReady) return
-        if (!recentSyncInFlight.compareAndSet(false, true)) return
+        if (!current.relayConnected || !current.macConnected || !current.appServerReady) {
+            if (manual) failManualSync("Mac 或 Codex 尚未连接")
+            return
+        }
+        if (!recentSyncInFlight.compareAndSet(false, true)) {
+            if (manual) {
+                manualSyncQueued.set(true)
+                _state.value = _state.value.copy(
+                    manualSyncVisible = true,
+                    manualSyncInProgress = true,
+                    manualSyncCompleted = 0,
+                    manualSyncTotal = 0,
+                    manualSyncFailed = 0,
+                    manualSyncChanged = 0,
+                )
+            }
+            return
+        }
         val context = appContext
         if (context == null) {
             recentSyncInFlight.set(false)
+            if (manual) failManualSync("应用尚未初始化")
             return
+        }
+        val syncId = UUID.randomUUID().toString()
+        if (manual) {
+            manualSyncQueued.set(false)
+            manualSyncId = syncId
+            _state.value = _state.value.copy(
+                manualSyncVisible = true,
+                manualSyncInProgress = true,
+                manualSyncCompleted = 0,
+                manualSyncTotal = 0,
+                manualSyncFailed = 0,
+                manualSyncChanged = 0,
+                error = null,
+            )
         }
         val preferences = context.getSharedPreferences(RECENT_SYNC_PREFS, Context.MODE_PRIVATE)
         val knownRevisions = JSONObject()
@@ -126,14 +159,21 @@ object BridgeClient {
         }
         request(
             "thread.recent.sync",
-            JSONObject().put("knownRevisions", knownRevisions),
+            JSONObject()
+                .put("knownRevisions", knownRevisions)
+                .put("manual", manual)
+                .put("syncId", syncId),
             onError = { message ->
                 recentSyncInFlight.set(false)
                 Log.w("CodexMobile", "Recent thread synchronization failed: $message")
+                if (manual) failManualSync(message)
+                runQueuedManualSync()
             },
         ) { result ->
             recentSyncInFlight.set(false)
             parseRecentThreadSync(result)
+            if (manual) finishManualSync(syncId, result.optJSONObject("sync") ?: JSONObject())
+            runQueuedManualSync()
         }
     }
 
@@ -142,10 +182,63 @@ object BridgeClient {
             forceReconnect()
             return
         }
-        refreshThreads()
-        request("status", JSONObject()) { result ->
-            _state.value = _state.value.copy(appServerReady = result.optBoolean("appServerReady"))
-            refreshRecentThreads()
+        _state.value = _state.value.copy(
+            manualSyncVisible = true,
+            manualSyncInProgress = true,
+            manualSyncCompleted = 0,
+            manualSyncTotal = 0,
+            manualSyncFailed = 0,
+            manualSyncChanged = 0,
+            error = null,
+        )
+        if (_state.value.appServerReady) {
+            refreshRecentThreads(manual = true)
+        } else {
+            request("status", JSONObject(), onError = ::failManualSync) { result ->
+                val ready = result.optBoolean("appServerReady")
+                _state.value = _state.value.copy(appServerReady = ready)
+                if (ready) refreshRecentThreads(manual = true)
+                else failManualSync("Codex 尚未就绪")
+            }
+        }
+    }
+
+    private fun runQueuedManualSync() {
+        if (manualSyncQueued.compareAndSet(true, false)) refreshRecentThreads(manual = true)
+    }
+
+    private fun failManualSync(message: String) {
+        Log.w("CodexMobile", "Manual recent sync failed: $message")
+        manualSyncId = null
+        _state.value = _state.value.copy(
+            manualSyncVisible = false,
+            manualSyncInProgress = false,
+            error = message,
+        )
+    }
+
+    private fun finishManualSync(syncId: String, sync: JSONObject) {
+        if (manualSyncId != syncId) return
+        val total = sync.optInt("checkedCount")
+        val failed = sync.optInt("failedCount")
+        Log.i(
+            "CodexMobile",
+            "Manual recent sync completed total=$total changed=${sync.optInt("changedCount")} failed=$failed",
+        )
+        _state.value = _state.value.copy(
+            manualSyncVisible = true,
+            manualSyncInProgress = false,
+            manualSyncCompleted = total,
+            manualSyncTotal = total,
+            manualSyncFailed = failed,
+            manualSyncChanged = sync.optInt("changedCount"),
+        )
+        scope.launch {
+            delay(2_000)
+            if (manualSyncId == syncId && !_state.value.manualSyncInProgress) {
+                manualSyncId = null
+                _state.value = _state.value.copy(manualSyncVisible = false)
+            }
         }
     }
 
@@ -903,6 +996,14 @@ object BridgeClient {
         pendingTimeouts.clear()
         latestSyncInFlight.clear()
         recentSyncInFlight.set(false)
+        manualSyncQueued.set(false)
+        manualSyncId = null
+        if (_state.value.manualSyncVisible) {
+            _state.value = _state.value.copy(
+                manualSyncVisible = false,
+                manualSyncInProgress = false,
+            )
+        }
         transportErrors.forEach { it("连接中断") }
         if (_state.value.sendPending) {
             val current = _state.value
@@ -1020,6 +1121,22 @@ object BridgeClient {
         val selectedId = _state.value.selectedThread?.id
         val eventThreadId = data.optString("threadId")
         when (event) {
+            "thread.recent.sync.progress" -> {
+                if (data.optString("syncId") == manualSyncId) {
+                    Log.i(
+                        "CodexMobile",
+                        "Manual recent sync progress completed=${data.optInt("completedCount")} total=${data.optInt("totalCount")} failed=${data.optInt("failedCount")}",
+                    )
+                    _state.value = _state.value.copy(
+                        manualSyncVisible = true,
+                        manualSyncInProgress = true,
+                        manualSyncCompleted = data.optInt("completedCount"),
+                        manualSyncTotal = data.optInt("totalCount"),
+                        manualSyncFailed = data.optInt("failedCount"),
+                        manualSyncChanged = data.optInt("changedCount"),
+                    )
+                }
+            }
             "turn/started" -> {
                 updateThreadActivity(eventThreadId, ThreadActivity.RUNNING)
                 if (eventThreadId == selectedId) {

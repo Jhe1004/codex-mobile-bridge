@@ -210,7 +210,7 @@ async function startAppServer() {
   });
   try {
     await rpc("initialize", {
-      clientInfo: { name: "codex_mobile_bridge", title: "Codex Mobile Bridge", version: "0.19.0" },
+      clientInfo: { name: "codex_mobile_bridge", title: "Codex Mobile Bridge", version: "0.20.0" },
       capabilities: { experimentalApi: true },
     });
     appReady = true;
@@ -269,6 +269,13 @@ async function dispatchRequest(message) {
             knownRevisions: payload.knownRevisions ?? {},
             getSourceThread: (thread) => knownThreadSources.get(thread.id) ?? thread,
             limit: 120,
+            onProgress: payload.manual === true && payload.syncId ? (progress) => {
+              sendRelay({
+                type: "event",
+                event: "thread.recent.sync.progress",
+                data: { syncId: String(payload.syncId), ...progress },
+              });
+            } : null,
           });
           result = { threadList, sync };
         }

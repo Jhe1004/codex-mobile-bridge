@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.20.0 - 2026-10-19
+
+- Turn the home-screen heartbeat button into a manual verification of every conversation active within the last 24 hours.
+- Stream per-conversation progress from the Mac so Android shows a determinate progress bar, changed count, and isolated failure count.
+- Queue a manual verification behind any active automatic pass instead of running overlapping Codex history reads.
+- Keep the completed summary visible briefly before returning to the compact home header.
+
 ## 0.19.0 - 2026-10-19
 
 - While the phone is connected, refresh the Codex thread list every five seconds and verify every conversation updated within the last 24 hours.

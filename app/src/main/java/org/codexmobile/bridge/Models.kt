@@ -147,5 +147,11 @@ data class BridgeUiState(
     val fileTransfer: FileTransferState? = null,
     val filePreview: FilePreview? = null,
     val composerAttachments: List<ComposerAttachment> = emptyList(),
+    val manualSyncVisible: Boolean = false,
+    val manualSyncInProgress: Boolean = false,
+    val manualSyncCompleted: Int = 0,
+    val manualSyncTotal: Int = 0,
+    val manualSyncFailed: Int = 0,
+    val manualSyncChanged: Int = 0,
     val error: String? = null,
 )

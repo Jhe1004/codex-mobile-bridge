@@ -27,6 +27,7 @@ assert.deepEqual(
 let activeCalls = 0;
 let maximumActiveCalls = 0;
 const knownRevisions = { "recent-seconds": "known-revision" };
+const progressEvents = [];
 const result = await syncRecentlyActiveThreads(async (_method, params) => {
   activeCalls += 1;
   maximumActiveCalls = Math.max(maximumActiveCalls, activeCalls);
@@ -42,6 +43,7 @@ const result = await syncRecentlyActiveThreads(async (_method, params) => {
   nowMs,
   concurrency: 2,
   getSourceThread: (thread) => ({ ...thread, sourceMarker: true }),
+  onProgress: (progress) => progressEvents.push(progress),
 });
 
 assert.equal(result.checkedCount, 3);
@@ -54,6 +56,19 @@ assert.match(result.data[1].error, /isolated failure/);
 assert.ok(maximumActiveCalls <= 2);
 assert.ok(maximumActiveCalls >= 2);
 assert.ok(!result.data.some((entry) => entry.threadId === "old-idle"));
+assert.deepEqual(progressEvents[0], {
+  completedCount: 0,
+  totalCount: 3,
+  failedCount: 0,
+  changedCount: 0,
+});
+assert.deepEqual(progressEvents.at(-1), {
+  completedCount: 3,
+  totalCount: 3,
+  failedCount: 1,
+  changedCount: 2,
+});
+assert.deepEqual(progressEvents.map((event) => event.completedCount).sort((a, b) => a - b), [0, 1, 2, 3]);
 
 console.log(JSON.stringify({
   ok: true,

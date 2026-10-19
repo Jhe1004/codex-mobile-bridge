@@ -29,7 +29,7 @@ Codex Desktop / codex app-server
 
 - **Desktop Project & Chat Sync**: Reads the project tree and conversation list directly from Codex Desktop on your Mac so both views stay in sync.
 - **Seamless Chat Handoff**: Send prompts to existing conversations from your phone. While the task runs, the bridge follows the original Desktop-owned chat in read-only mode so switching views cannot leave Desktop stuck in a thinking state. The follower is released as soon as the turn finishes, without creating a second writer.
-- **Connection Health & Heartbeat**: Displays live connection status across your phone, the relay, and the active session, with automatic reconnect and manual refresh.
+- **Connection Health & Heartbeat**: Displays live connection status across your phone, the relay, and the active session. Tapping the home heartbeat verifies every conversation active within the last 24 hours and shows per-conversation progress, changed count, and isolated failures.
 - **Native Mac Manager**: Installs a native control center by default so you can inspect the relay, bridge, Codex, and phone connection state, then start, stop, or restart the background services.
 - **Xiaomi HyperOS 4 Super Island (Optional)**: Shows ready, working, approval, transfer, completion, and disconnection states while a chat is active. It stays disabled on other systems and requires Xiaomi platform registration and scenario approval.
 - **Markdown & Immersive HTML Reader**: Renders Markdown natively in chat and streams large HTML documents from on-device storage to avoid memory-heavy blank pages. The reader menu can also hand the file to another Android app.
