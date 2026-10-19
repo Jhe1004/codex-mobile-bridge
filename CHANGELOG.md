@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.18.0 - 2026-10-19
+
+- Replaced rollout-file-only cache validation with a digest of the actual latest visible Codex messages.
+- Always verifies an instantly rendered phone cache against Codex, including after context compaction, thread migration, or Desktop restoration.
+- Keeps polling while a turn is active so a missed completion event cannot permanently freeze the phone on an older result.
+- Added request timeouts and relay sequence-gap recovery; stalled requests are released and retried automatically.
+- Marks a conversation as synchronized only after the bridge has checked the current Codex message tail.
+
 ## 0.17.0 - 2026-10-19
 
 - Restore the last 120 visible messages from Android's private on-device cache when a chat opens.

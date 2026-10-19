@@ -61,6 +61,7 @@ object BridgeClient {
     @Volatile private var lastRelayMessageAtMs = 0L
     private val pending = ConcurrentHashMap<String, (JSONObject) -> Unit>()
     private val pendingErrors = ConcurrentHashMap<String, (String) -> Unit>()
+    private val pendingTimeouts = ConcurrentHashMap<String, Job>()
     private val cancelledAttachmentIds = ConcurrentHashMap.newKeySet<String>()
     private val latestSyncInFlight = ConcurrentHashMap.newKeySet<String>()
     private val selectedCacheGeneration = AtomicLong(0)
@@ -72,6 +73,7 @@ object BridgeClient {
     private const val THREAD_READ_PREFS = "thread_read_state_v1"
     private const val THREAD_READ_INITIALIZED = "__initialized__"
     @Volatile private var sequenceKey = "default"
+    @Volatile private var lastSeenSequence = 0L
 
     fun start(context: Context) {
         appContext = context.applicationContext
@@ -153,6 +155,10 @@ object BridgeClient {
                         loadedContentRevision = cached?.contentRevision.orEmpty(),
                     )
                 }
+                // Render the disk cache immediately, then verify it against
+                // Codex. A restored or compacted chat may have continued in a
+                // replacement rollout even when the original file is unchanged.
+                refreshSelectedThread(showSyncing = false)
             } else {
                 _state.update { current ->
                     if (current.selectedThread?.id != selected.id) current else current.copy(
@@ -167,7 +173,6 @@ object BridgeClient {
 
     fun refreshSelectedThread(showSyncing: Boolean = false) {
         val threadId = _state.value.selectedThread?.id ?: return
-        if (_state.value.activeTurnId != null) return
         if (!latestSyncInFlight.add(threadId)) return
         if (showSyncing) {
             _state.update { current ->
@@ -805,6 +810,7 @@ object BridgeClient {
             .replaceFirst(Regex("^ws://", RegexOption.IGNORE_CASE), "http://")
         sequenceKey = "relay_${normalizedRelayUrl.hashCode().toUInt().toString(16)}"
         val since = context.getSharedPreferences(SEQUENCE_PREFS, Context.MODE_PRIVATE).getLong(sequenceKey, 0L)
+        lastSeenSequence = since
         val url = normalizedRelayUrl.toHttpUrl().newBuilder()
             .addQueryParameter("role", "android")
             .addQueryParameter("deviceId", android.os.Build.MODEL)
@@ -857,6 +863,8 @@ object BridgeClient {
         val transportErrors = pendingErrors.values.toList()
         pending.clear()
         pendingErrors.clear()
+        pendingTimeouts.values.forEach { it.cancel() }
+        pendingTimeouts.clear()
         latestSyncInFlight.clear()
         transportErrors.forEach { it("连接中断") }
         if (_state.value.sendPending) {
@@ -898,12 +906,20 @@ object BridgeClient {
             Log.e("CodexMobile", "Request $action failed: $message")
             onError(message)
         }
+        pendingTimeouts[id] = scope.launch {
+            delay(requestTimeoutMs(action))
+            val callback = pending.remove(id)
+            val errorCallback = pendingErrors.remove(id)
+            pendingTimeouts.remove(id)
+            if (callback != null) errorCallback?.invoke("请求超时，正在自动重试")
+        }
         val message = JSONObject()
             .put("type", "request")
             .put("requestId", id)
             .put("action", action)
             .put("payload", payload)
         if (webSocket?.send(message.toString()) != true) {
+            pendingTimeouts.remove(id)?.cancel()
             pending.remove(id)
             pendingErrors.remove(id)?.invoke("当前未连接")
         }
@@ -912,8 +928,18 @@ object BridgeClient {
     private fun handleMessage(message: JSONObject) {
         val sequence = message.optLong("seq", 0L)
         if (sequence > 0L) {
+            val previous = lastSeenSequence
+            lastSeenSequence = sequence
             appContext?.getSharedPreferences(SEQUENCE_PREFS, Context.MODE_PRIVATE)
                 ?.edit()?.putLong(sequenceKey, sequence)?.apply()
+            if (previous > 0L && sequence > previous + 1L) {
+                Log.w("CodexMobile", "Relay sequence gap: expected=${previous + 1L} actual=$sequence")
+                scope.launch {
+                    delay(250)
+                    refreshThreads()
+                    refreshSelectedThread(showSyncing = false)
+                }
+            }
         }
         when (message.optString("type")) {
             "relay.ready" -> {
@@ -929,6 +955,7 @@ object BridgeClient {
                 val id = message.optString("requestId")
                 val callback = pending.remove(id)
                 val errorCallback = pendingErrors.remove(id)
+                pendingTimeouts.remove(id)?.cancel()
                 if (message.optBoolean("ok")) callback?.invoke(message.optJSONObject("result") ?: JSONObject())
                 else errorCallback?.invoke(message.optJSONObject("error")?.optString("message") ?: "请求失败")
             }
@@ -1183,7 +1210,10 @@ object BridgeClient {
         val revision = result.optString("revision").ifBlank { _state.value.selectedThread?.contentRevision.orEmpty() }
         if (result.optBoolean("notModified")) {
             _state.value = _state.value.copy(
-                conversationContentState = ConversationContentState.CACHED_CURRENT,
+                // The bridge has just compared the real Codex message tail,
+                // so this is a verified live state rather than an assumption
+                // based only on the phone's disk cache.
+                conversationContentState = ConversationContentState.LIVE,
                 loadedContentRevision = revision.ifBlank { _state.value.loadedContentRevision },
                 error = null,
             )
@@ -1279,6 +1309,13 @@ object BridgeClient {
     private const val MAX_ATTACHMENTS_PER_TURN = 10
     private const val MAX_UPLOAD_BYTES = 100L * 1024L * 1024L
     private const val DEFAULT_UPLOAD_CHUNK_BYTES = 512 * 1024
+}
+
+private fun requestTimeoutMs(action: String): Long = when (action) {
+    "turn.start", "thread.prepare" -> 150_000L
+    "file.upload.begin", "file.upload.chunk", "file.upload.finish",
+    "file.stat", "file.read" -> 90_000L
+    else -> 45_000L
 }
 
 private fun mimeTypeFromName(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {

@@ -209,7 +209,7 @@ async function startAppServer() {
   });
   try {
     await rpc("initialize", {
-      clientInfo: { name: "codex_mobile_bridge", title: "Codex Mobile Bridge", version: "0.17.0" },
+      clientInfo: { name: "codex_mobile_bridge", title: "Codex Mobile Bridge", version: "0.18.0" },
       capabilities: { experimentalApi: true },
     });
     appReady = true;
