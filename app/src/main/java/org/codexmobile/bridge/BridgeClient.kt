@@ -42,6 +42,7 @@ import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import javax.net.ssl.SSLContext
@@ -61,6 +62,9 @@ object BridgeClient {
     private val pending = ConcurrentHashMap<String, (JSONObject) -> Unit>()
     private val pendingErrors = ConcurrentHashMap<String, (String) -> Unit>()
     private val cancelledAttachmentIds = ConcurrentHashMap.newKeySet<String>()
+    private val latestSyncInFlight = ConcurrentHashMap.newKeySet<String>()
+    private val selectedCacheGeneration = AtomicLong(0)
+    @Volatile private var conversationCache: ConversationCacheStore? = null
     @Volatile private var activeTransferId: String? = null
     @Volatile private var activeTransferFile: File? = null
     private var reconnectDelay = 1_000L
@@ -71,6 +75,7 @@ object BridgeClient {
 
     fun start(context: Context) {
         appContext = context.applicationContext
+        if (conversationCache == null) conversationCache = ConversationCacheStore.forContext(context.applicationContext)
         if (connectionJob?.isActive == true) return
         connectionJob = scope.launch { connectionLoop() }
     }
@@ -118,6 +123,7 @@ object BridgeClient {
     fun selectThread(thread: ThreadSummary) {
         markThreadRead(thread)
         val selected = thread.copy(activity = if (thread.activity == ThreadActivity.UNREAD) ThreadActivity.IDLE else thread.activity)
+        val cacheGeneration = selectedCacheGeneration.incrementAndGet()
         _state.value = _state.value.copy(
             threads = _state.value.threads.map { if (it.id == thread.id) selected else it },
             selectedThread = selected,
@@ -126,56 +132,79 @@ object BridgeClient {
             streamingText = "",
             lastTurnCompletedAtMs = null,
             sendPending = false,
-            preparingThreadId = selected.id,
+            preparingThreadId = null,
             preparedThreadId = null,
+            conversationContentState = ConversationContentState.LOADING_CACHE,
+            loadedContentRevision = "",
             error = null,
         )
-        prepareThread(selected.id)
-        refreshSelectedThread()
-    }
-
-    private fun prepareThread(threadId: String) {
-        request(
-            "thread.prepare",
-            JSONObject().put("threadId", threadId),
-            onError = { message ->
-                Log.w("CodexMobile", "Thread preheat failed for $threadId: $message")
-                if (_state.value.selectedThread?.id == threadId) {
-                    _state.value = _state.value.copy(preparingThreadId = null, preparedThreadId = null)
+        scope.launch {
+            val cached = conversationCache?.load(selected.id)
+            if (selectedCacheGeneration.get() != cacheGeneration || _state.value.selectedThread?.id != selected.id) return@launch
+            if (cached != null) {
+                _state.update { current ->
+                    if (current.selectedThread?.id != selected.id) current else current.copy(messages = cached.messages)
                 }
-            },
-        ) { result ->
-            if (_state.value.selectedThread?.id == threadId && result.optBoolean("ready")) {
-                _state.value = _state.value.copy(
-                    preparingThreadId = null,
-                    preparedThreadId = threadId,
-                )
+            }
+            if (cacheMatchesThread(cached, selected) && selected.activity != ThreadActivity.RUNNING) {
+                _state.update { current ->
+                    if (current.selectedThread?.id != selected.id) current else current.copy(
+                        conversationContentState = ConversationContentState.CACHED_CURRENT,
+                        loadedContentRevision = cached?.contentRevision.orEmpty(),
+                    )
+                }
+            } else {
+                _state.update { current ->
+                    if (current.selectedThread?.id != selected.id) current else current.copy(
+                        conversationContentState = ConversationContentState.SYNCING,
+                        loadedContentRevision = cached?.contentRevision.orEmpty(),
+                    )
+                }
+                refreshSelectedThread(showSyncing = true)
             }
         }
     }
 
-    fun refreshSelectedThread() {
+    fun refreshSelectedThread(showSyncing: Boolean = false) {
         val threadId = _state.value.selectedThread?.id ?: return
         if (_state.value.activeTurnId != null) return
-        request("thread.latest", JSONObject().put("threadId", threadId).put("limit", 120)) { result ->
+        if (!latestSyncInFlight.add(threadId)) return
+        if (showSyncing) {
+            _state.update { current ->
+                if (current.selectedThread?.id == threadId) current.copy(conversationContentState = ConversationContentState.SYNCING) else current
+            }
+        }
+        val knownRevision = _state.value.loadedContentRevision
+        request(
+            "thread.latest",
+            JSONObject().put("threadId", threadId).put("limit", 120).put("knownRevision", knownRevision),
+            onError = { message ->
+                latestSyncInFlight.remove(threadId)
+                if (_state.value.selectedThread?.id == threadId) {
+                    _state.value = _state.value.copy(
+                        conversationContentState = if (_state.value.loadedContentRevision.isNotBlank()) {
+                            ConversationContentState.CACHED_CURRENT
+                        } else {
+                            ConversationContentState.NONE
+                        },
+                        error = message,
+                    )
+                }
+            },
+        ) { result ->
+            latestSyncInFlight.remove(threadId)
             parseLatestMessages(threadId, result)
         }
     }
 
     fun refreshSelectedSession() {
-        val threadId = _state.value.selectedThread?.id ?: return
-        if (_state.value.preparingThreadId != threadId) {
-            _state.value = _state.value.copy(
-                preparingThreadId = threadId,
-                preparedThreadId = null,
-                error = null,
-            )
-            prepareThread(threadId)
-        }
-        refreshSelectedThread()
+        if (_state.value.selectedThread == null) return
+        _state.value = _state.value.copy(error = null)
+        refreshSelectedThread(showSyncing = true)
     }
 
     fun backToThreads() {
+        selectedCacheGeneration.incrementAndGet()
         val current = _state.value
         current.composerAttachments.forEach { attachment ->
             if (attachment.status == AttachmentUploadStatus.HASHING ||
@@ -203,6 +232,8 @@ object BridgeClient {
             sendPending = false,
             preparingThreadId = null,
             preparedThreadId = null,
+            conversationContentState = ConversationContentState.NONE,
+            loadedContentRevision = "",
             composerAttachments = emptyList(),
             error = null,
         )
@@ -216,6 +247,8 @@ object BridgeClient {
                 selectedThread = summary,
                 messages = emptyList(),
                 pendingOutgoing = null,
+                conversationContentState = ConversationContentState.LIVE,
+                loadedContentRevision = summary.contentRevision,
             )
             refreshThreads()
         }
@@ -248,6 +281,8 @@ object BridgeClient {
             messages = _state.value.messages + optimisticMessage,
             pendingOutgoing = PendingOutgoingMessage(thread.id, optimisticMessage),
             sendPending = true,
+            preparingThreadId = thread.id,
+            preparedThreadId = null,
             streamingText = "",
             lastTurnCompletedAtMs = null,
             error = null,
@@ -267,6 +302,8 @@ object BridgeClient {
                         it.message.clientId == clientUserMessageId
                     },
                     sendPending = false,
+                    preparingThreadId = null,
+                    preparedThreadId = null,
                     error = message,
                 )
             },
@@ -286,6 +323,7 @@ object BridgeClient {
                 composerAttachments = emptyList(),
                 error = null,
             )
+            persistConversation(_state.value.selectedThread, _state.value.messages)
             mainHandler.post(onAccepted)
         }
     }
@@ -819,6 +857,7 @@ object BridgeClient {
         val transportErrors = pendingErrors.values.toList()
         pending.clear()
         pendingErrors.clear()
+        latestSyncInFlight.clear()
         transportErrors.forEach { it("连接中断") }
         if (_state.value.sendPending) {
             val current = _state.value
@@ -829,6 +868,8 @@ object BridgeClient {
                 },
                 pendingOutgoing = null,
                 sendPending = false,
+                preparingThreadId = null,
+                preparedThreadId = null,
                 error = "连接中断，消息尚未发送，请重试",
             )
         }
@@ -879,7 +920,6 @@ object BridgeClient {
                 val mac = message.optBoolean("macConnected")
                 _state.value = _state.value.copy(macConnected = mac, connection = if (mac) "已连接" else "Mac 离线")
                 refreshThreads()
-                _state.value.selectedThread?.id?.let(::prepareThread)
                 request("status", JSONObject()) { result ->
                     _state.value = _state.value.copy(appServerReady = result.optBoolean("appServerReady"))
                 }
@@ -928,6 +968,7 @@ object BridgeClient {
                             messages = _state.value.messages + ChatMessage(id, "assistant", text),
                             streamingText = "",
                         )
+                        persistConversation(_state.value.selectedThread, _state.value.messages)
                     }
                 }
             }
@@ -987,6 +1028,9 @@ object BridgeClient {
         val selectedProject = previous.selectedProject?.let { selected ->
             projects.firstOrNull { it.id == selected.id } ?: selected
         }
+        val refreshedSelectedThread = previous.selectedThread?.let { selected ->
+            items.firstOrNull { it.id == selected.id } ?: selected
+        }
         val projectIds = projects.map { it.id }.toSet()
         val shouldInitializeExpansion = !previous.projectExpansionInitialized && projects.isNotEmpty()
         val expandedProjectIds = if (previous.projectExpansionInitialized) {
@@ -1002,7 +1046,16 @@ object BridgeClient {
             expandedProjectIds = expandedProjectIds,
             projectExpansionInitialized = previous.projectExpansionInitialized || shouldInitializeExpansion,
             selectedProject = selectedProject,
+            selectedThread = refreshedSelectedThread,
         )
+        if (refreshedSelectedThread != null &&
+            previous.loadedContentRevision.isNotBlank() &&
+            refreshedSelectedThread.contentRevision.isNotBlank() &&
+            refreshedSelectedThread.contentRevision != previous.loadedContentRevision &&
+            previous.activeTurnId == null
+        ) {
+            refreshSelectedThread(showSyncing = true)
+        }
     }
 
     private fun threadSummary(obj: JSONObject, fallbackProjectId: String = ""): ThreadSummary {
@@ -1021,6 +1074,7 @@ object BridgeClient {
             projectId = obj.optString("projectId").ifBlank { fallbackProjectId },
             activity = if (obj.optString("mobileActivity") == "running") ThreadActivity.RUNNING else ThreadActivity.IDLE,
             completionRevision = obj.optString("completionRevision"),
+            contentRevision = obj.optString("contentRevision"),
         )
     }
 
@@ -1126,6 +1180,15 @@ object BridgeClient {
 
     private fun parseLatestMessages(requestedThreadId: String, result: JSONObject) {
         if (_state.value.selectedThread?.id != requestedThreadId) return
+        val revision = result.optString("revision").ifBlank { _state.value.selectedThread?.contentRevision.orEmpty() }
+        if (result.optBoolean("notModified")) {
+            _state.value = _state.value.copy(
+                conversationContentState = ConversationContentState.CACHED_CURRENT,
+                loadedContentRevision = revision.ifBlank { _state.value.loadedContentRevision },
+                error = null,
+            )
+            return
+        }
         val array = result.optJSONArray("messages") ?: JSONArray()
         val messages = buildList {
             for (i in 0 until array.length()) {
@@ -1144,10 +1207,26 @@ object BridgeClient {
             }
         }
         val merged = mergeServerMessages(requestedThreadId, messages, _state.value.pendingOutgoing)
+        val selectedThread = _state.value.selectedThread?.let { selected ->
+            if (selected.id == requestedThreadId && revision.isNotBlank()) selected.copy(contentRevision = revision) else selected
+        }
         _state.value = _state.value.copy(
             messages = merged.messages,
             pendingOutgoing = merged.pendingOutgoing,
+            selectedThread = selectedThread,
+            threads = _state.value.threads.map { thread ->
+                if (thread.id == requestedThreadId && revision.isNotBlank()) thread.copy(contentRevision = revision) else thread
+            },
+            conversationContentState = ConversationContentState.LIVE,
+            loadedContentRevision = revision,
+            error = null,
         )
+        persistConversation(selectedThread, merged.messages)
+    }
+
+    private fun persistConversation(thread: ThreadSummary?, messages: List<ChatMessage>) {
+        if (thread == null || thread.contentRevision.isBlank()) return
+        scope.launch { conversationCache?.save(thread, messages) }
     }
 
     private fun userText(item: JSONObject): String {

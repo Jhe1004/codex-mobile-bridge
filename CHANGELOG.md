@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.17.0 - 2026-10-19
+
+- Restore the last 120 visible messages from Android's private on-device cache when a chat opens.
+- Compare a lightweight rollout-file revision before asking Codex app-server for full message history; unchanged chats avoid the expensive history query.
+- Stop waking Codex Desktop merely to read a chat. Desktop ownership is acquired only when the user actually sends a message.
+- Keep cached history across app and Mac restarts, with a 64 MB / 40-chat bounded LRU policy and atomic cache writes.
+
 ## 0.16.0 - 2026-10-19
 
 - Replace the image-preview spinner failure with format-aware PNG/JPEG/WebP/GIF/BMP/HEIC/HEIF/AVIF decoding and a readable fallback.

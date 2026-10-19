@@ -6,6 +6,14 @@ enum class ThreadActivity {
     IDLE,
 }
 
+enum class ConversationContentState {
+    NONE,
+    LOADING_CACHE,
+    CACHED_CURRENT,
+    SYNCING,
+    LIVE,
+}
+
 internal fun displayedThreadActivity(
     runtimeActivity: ThreadActivity,
     completionRevision: String,
@@ -27,6 +35,7 @@ data class ThreadSummary(
     val projectId: String,
     val activity: ThreadActivity = ThreadActivity.IDLE,
     val completionRevision: String = "",
+    val contentRevision: String = "",
 )
 
 data class ProjectSummary(
@@ -126,6 +135,8 @@ data class BridgeUiState(
     val selectedThread: ThreadSummary? = null,
     val preparingThreadId: String? = null,
     val preparedThreadId: String? = null,
+    val conversationContentState: ConversationContentState = ConversationContentState.NONE,
+    val loadedContentRevision: String = "",
     val messages: List<ChatMessage> = emptyList(),
     val pendingOutgoing: PendingOutgoingMessage? = null,
     val streamingText: String = "",

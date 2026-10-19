@@ -16,6 +16,9 @@
   persistent `sent` directory so old chats do not lose their attachment path.
   `CODEX_MOBILE_UPLOAD_ROOT` may override the directory for advanced deployments;
   keep that directory private to the current macOS user.
+- Android stores recent visible chat text only in its app-private internal
+  storage. The cache is bounded to 64 MB and 40 chats, uses atomic replacement,
+  and is removed when app data is cleared or the app is uninstalled.
 - The Android token is encrypted with Android Keystore after import. The
   temporary pairing file is deleted after a successful import.
 - Rotate both tokens after a lost phone, a shared log, or a suspected leak.

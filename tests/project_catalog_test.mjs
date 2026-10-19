@@ -20,7 +20,7 @@ assert.equal(resolveProjectId({ id: "other", cwd: "/tmp" }, catalog), OTHER_PROJ
 const result = enrichThreadList({ data: [
   { id: "assigned", cwd: "/somewhere/else", name: "会话二" },
   { id: "projectless", cwd: "/work/hyde", name: "显式无项目会话" },
-  { id: "nested", cwd: "/work/hyde", name: "会话一", mobileActivity: "running", completionRevision: "turn-1" },
+  { id: "nested", cwd: "/work/hyde", name: "会话一", mobileActivity: "running", completionRevision: "turn-1", contentRevision: "file:10:20" },
   { id: "nested", cwd: "/work/hyde", name: "重复会话" },
   { id: "other", cwd: "/tmp", name: "其他" },
 ] }, catalog);
@@ -33,5 +33,6 @@ assert.deepEqual(result.projects.map((project) => [project.id, project.threadCou
 ]);
 assert.equal(result.data[2].mobileActivity, "running");
 assert.equal(result.data[2].completionRevision, "turn-1");
+assert.equal(result.data[2].contentRevision, "file:10:20");
 
 console.log("project catalog mapping: ok");

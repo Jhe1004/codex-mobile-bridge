@@ -26,6 +26,7 @@ changed through the `DesktopIpcClient` constructor in tests or code.
 8. Preview one explicit, non-sensitive image, PDF, HTML, and text fixture.
 9. Confirm the open-with icon appears in every preview type.
 10. Upload one generated image and one generated text file from Android, then verify both appear in the harmless test chat.
+11. Open the same chat twice. The second open must show cached messages without a Desktop wake, and the lightweight revision check must report `notModified` until the rollout changes.
 
 Do not use arbitrary user files or real private chats as public test fixtures.
 

@@ -22,10 +22,10 @@ class ConnectionHealthTest {
     }
 
     @Test
-    fun selectedPreparedThreadIsReady() {
+    fun selectedConnectedThreadIsReadyWithoutDesktopWake() {
         assertEquals(
             SessionConnectionHealth.READY,
-            sessionConnectionHealth(true, true, true, "thread-1", null, "thread-1"),
+            sessionConnectionHealth(true, true, true, "thread-1", null),
         )
     }
 
@@ -33,19 +33,23 @@ class ConnectionHealthTest {
     fun selectedPreparingThreadIsPreparing() {
         assertEquals(
             SessionConnectionHealth.PREPARING,
-            sessionConnectionHealth(true, true, true, "thread-1", "thread-1", null),
+            sessionConnectionHealth(true, true, true, "thread-1", "thread-1"),
         )
     }
 
     @Test
-    fun staleOrDisconnectedThreadIsUnhealthy() {
+    fun connectedThreadDoesNotNeedPreheatingToBeHealthy() {
         assertEquals(
-            SessionConnectionHealth.UNHEALTHY,
-            sessionConnectionHealth(true, true, true, "thread-1", null, "thread-2"),
+            SessionConnectionHealth.READY,
+            sessionConnectionHealth(true, true, true, "thread-1", null),
         )
+    }
+
+    @Test
+    fun disconnectedThreadIsUnhealthy() {
         assertEquals(
             SessionConnectionHealth.UNHEALTHY,
-            sessionConnectionHealth(false, true, true, "thread-1", null, "thread-1"),
+            sessionConnectionHealth(false, true, true, "thread-1", null),
         )
     }
 }

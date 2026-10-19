@@ -35,6 +35,7 @@ Codex Desktop / codex app-server
 - **Markdown & Immersive HTML Reader**: Renders Markdown natively in chat and streams large HTML documents from on-device storage to avoid memory-heavy blank pages. The reader menu can also hand the file to another Android app.
 - **Selectable Chat Text**: Long-press any user or Codex message to adjust the selection and use Android's native copy action, including rendered Markdown and code.
 - **Conversation Status Indicators**: Shows Running, New Reply, or Idle on the home screen, summarizes active and unread counts per project, and clears unread state when a conversation is opened.
+- **Instant Chat Restore & Incremental Sync**: Opens the last 120 visible messages from Android's private cache, then compares a lightweight content revision. Unchanged chats skip the full history read, and Codex Desktop is woken only when the user sends a message. The cache survives app and Mac restarts.
 - **Guarded Local File Preview & Cache**: Tap local Mac file paths to transfer and verify them in chunks. Images, SVG, PDF, HTML, text, code, audio, and video open inside the app; Office documents and archives retain a visible open-with action. Successful downloads are reused from a bounded on-device cache.
 - **Phone-to-Codex Attachments**: Pick images or other files from the composer. Android hashes and uploads each file in verified chunks before the Mac adds it to the Codex turn. Each file is limited to 100 MB and each turn to 10 attachments.
 - **Adaptive Layout**: Built with Jetpack Compose to fit phones, foldables, and tablets across Android 9 (API 28) and above.
@@ -97,6 +98,7 @@ The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`, and the
 - **Ignored Local Pairing Config**: `config/pairing.json` is used only for local USB provisioning and is ignored by Git.
 - **Scoped File Access**: File previews are restricted to the active conversation's project root plus directories explicitly listed in `CODEX_MOBILE_FILE_ROOTS`. See [SECURITY.md](../SECURITY.md) before exposing a tunnel publicly.
 - **Controlled Reverse Uploads**: Android cannot choose a Mac destination path. The bridge assigns a random path under the current user's Application Support directory and verifies size plus SHA-256 before an attachment can be sent. Unsent files expire; sent attachments remain available to old chats.
+- **Private Conversation Cache**: Message history remains in the Android app's private storage, bounded to 64 MB and the 40 most recently used chats. Clearing app data or uninstalling removes it.
 
 ## Documentation
 

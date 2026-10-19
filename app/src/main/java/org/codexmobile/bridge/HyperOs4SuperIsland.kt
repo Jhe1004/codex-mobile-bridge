@@ -134,8 +134,8 @@ internal fun superIslandPresentation(
         }
         state.preparingThreadId == thread.id -> {
             phase = SuperIslandPhase.PREPARING
-            status = "正在准备会话"
-            detail = "正在建立会话连接"
+            status = "正在连接会话"
+            detail = "正在为发送消息建立连接"
             color = "#F59E0B"
         }
         else -> {

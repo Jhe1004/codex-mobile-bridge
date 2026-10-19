@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { WebSocket } from "ws";
 import { enrichThreadList, readProjectCatalog } from "./project_catalog.mjs";
-import { listLatestVisibleMessages } from "./thread_messages.mjs";
+import { syncLatestVisibleMessages } from "./thread_sync.mjs";
 import { createFileAccess } from "./file_access.mjs";
 import { readableAppServerError, startTurnOnThread } from "./turn_start.mjs";
 import { DesktopIpcClient } from "./desktop_ipc.mjs";
@@ -47,6 +47,7 @@ const bridgeOwnedThreads = new Set();
 let bridgeReleaseTimer = null;
 let lastProjectCatalog = { projects: [], assignments: {} };
 const knownThreads = new Map();
+const knownThreadSources = new Map();
 let snapshotInFlight = false;
 
 function allowedRootsForThread(threadId) {
@@ -113,9 +114,12 @@ async function listAllThreads(options = {}) {
     all.push(...(result.data ?? []));
     cursor = result.nextCursor ?? null;
   } while (cursor);
-  const enriched = enrichThreadList({ data: annotateThreadStatuses(all), nextCursor: null }, currentProjectCatalog());
+  const annotated = annotateThreadStatuses(all);
+  const enriched = enrichThreadList({ data: annotated, nextCursor: null }, currentProjectCatalog());
   knownThreads.clear();
   for (const thread of enriched.data) knownThreads.set(thread.id, thread);
+  knownThreadSources.clear();
+  for (const thread of annotated) knownThreadSources.set(thread.id, thread);
   return enriched;
 }
 
@@ -205,7 +209,7 @@ async function startAppServer() {
   });
   try {
     await rpc("initialize", {
-      clientInfo: { name: "codex_mobile_bridge", title: "Codex Mobile Bridge", version: "0.5.0" },
+      clientInfo: { name: "codex_mobile_bridge", title: "Codex Mobile Bridge", version: "0.17.0" },
       capabilities: { experimentalApi: true },
     });
     appReady = true;
@@ -246,7 +250,12 @@ async function dispatchRequest(message) {
         break;
       case "thread.latest":
         if (!payload.threadId) throw new Error("threadId is required");
-        result = await listLatestVisibleMessages(rpc, payload.threadId, payload.limit ?? 120);
+        result = await syncLatestVisibleMessages(
+          rpc,
+          payload.threadId,
+          knownThreadSources.get(payload.threadId) ?? knownThreads.get(payload.threadId) ?? {},
+          { knownRevision: payload.knownRevision, limit: payload.limit ?? 120 },
+        );
         break;
       case "file.stat":
         result = await fileAccess.metadata(payload.threadId, payload.path);

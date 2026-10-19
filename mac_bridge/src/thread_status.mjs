@@ -58,17 +58,19 @@ export function createThreadStatusAnalyzer({ maxInspectedThreads = 60 } = {}) {
   return function annotateThreadStatuses(threads) {
     return threads.map((thread, index) => {
       let observed = null;
-      if (index < maxInspectedThreads && thread.path) {
-        let signature = "";
+      let signature = "";
+      if (thread.path) {
         try {
           const file = openSync(thread.path, "r");
           try {
             const stat = fstatSync(file);
-            signature = `${stat.size}:${stat.mtimeMs}`;
+            signature = `file:${stat.size}:${Math.trunc(stat.mtimeMs)}`;
           } finally {
             closeSync(file);
           }
         } catch {}
+      }
+      if (index < maxInspectedThreads && thread.path) {
         const cached = cache.get(thread.path);
         if (signature && cached?.signature === signature) observed = cached.observed;
         else {
@@ -81,6 +83,7 @@ export function createThreadStatusAnalyzer({ maxInspectedThreads = 60 } = {}) {
       return {
         ...thread,
         mobileActivity: activity,
+        contentRevision: signature || fallbackRevision(thread),
         // Keep the revision format stable whether or not this thread was among
         // the rollout files inspected during this refresh. The terminal turn
         // id is still used to classify activity, while updatedAt is the durable

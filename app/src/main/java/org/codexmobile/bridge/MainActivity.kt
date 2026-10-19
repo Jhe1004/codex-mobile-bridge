@@ -166,12 +166,10 @@ internal fun sessionConnectionHealth(
     appServerReady: Boolean,
     threadId: String?,
     preparingThreadId: String?,
-    preparedThreadId: String?,
 ): SessionConnectionHealth = when {
     !relayConnected || !macConnected || !appServerReady || threadId == null -> SessionConnectionHealth.UNHEALTHY
-    preparedThreadId == threadId -> SessionConnectionHealth.READY
     preparingThreadId == threadId -> SessionConnectionHealth.PREPARING
-    else -> SessionConnectionHealth.UNHEALTHY
+    else -> SessionConnectionHealth.READY
 }
 
 @Composable
@@ -244,7 +242,6 @@ private fun SessionHeartbeatIndicator(state: BridgeUiState, onClick: () -> Unit)
         appServerReady = state.appServerReady,
         threadId = state.selectedThread?.id,
         preparingThreadId = state.preparingThreadId,
-        preparedThreadId = state.preparedThreadId,
     )
     val color = when (health) {
         SessionConnectionHealth.READY -> Accent
@@ -252,8 +249,8 @@ private fun SessionHeartbeatIndicator(state: BridgeUiState, onClick: () -> Unit)
         SessionConnectionHealth.UNHEALTHY -> Color(0xFFC7372F)
     }
     val description = when (health) {
-        SessionConnectionHealth.READY -> "会话连接健康，点击刷新会话"
-        SessionConnectionHealth.PREPARING -> "会话正在准备，点击重新检查"
+        SessionConnectionHealth.READY -> "会话连接健康，点击检查新内容"
+        SessionConnectionHealth.PREPARING -> "正在连接会话以发送消息"
         SessionConnectionHealth.UNHEALTHY -> "会话连接不健康，点击重新连接并刷新"
     }
     val transition = rememberInfiniteTransition(label = "session-heartbeat")
@@ -520,8 +517,11 @@ private fun ChatScreen(state: BridgeUiState) {
     val threadId = state.selectedThread?.id
     val threadStatus = when {
         !state.relayConnected || !state.macConnected -> state.connection
-        state.preparingThreadId == threadId -> "正在准备会话…"
-        state.preparedThreadId == threadId -> "会话已就绪"
+        state.preparingThreadId == threadId -> "正在连接会话以发送…"
+        state.conversationContentState == ConversationContentState.LOADING_CACHE -> "正在读取本地记录…"
+        state.conversationContentState == ConversationContentState.SYNCING -> "正在检查新内容…"
+        state.conversationContentState == ConversationContentState.CACHED_CURRENT -> "会话已同步 · 本地缓存"
+        state.conversationContentState == ConversationContentState.LIVE -> "会话已同步"
         else -> state.connection
     }
     val hasStreamingMessage = state.streamingText.isNotBlank()
@@ -550,7 +550,7 @@ private fun ChatScreen(state: BridgeUiState) {
         containerColor = Paper,
         topBar = {
             TopAppBar(
-                title = { Column { Text(state.selectedThread?.title ?: "任务", maxLines = 1, fontWeight = FontWeight.SemiBold, color = Ink); Text(threadStatus, style = MaterialTheme.typography.labelSmall, color = if (state.preparedThreadId == threadId) Accent else Muted) } },
+                title = { Column { Text(state.selectedThread?.title ?: "任务", maxLines = 1, fontWeight = FontWeight.SemiBold, color = Ink); Text(threadStatus, style = MaterialTheme.typography.labelSmall, color = if (sessionConnectionHealth(state.relayConnected, state.macConnected, state.appServerReady, threadId, state.preparingThreadId) == SessionConnectionHealth.READY) Accent else Muted) } },
                 navigationIcon = { IconButton(onClick = BridgeClient::backToThreads) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") } },
                 actions = {
                     SessionHeartbeatIndicator(state, onClick = BridgeClient::refreshSelectedSession)
