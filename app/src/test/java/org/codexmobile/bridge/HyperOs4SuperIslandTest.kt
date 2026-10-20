@@ -51,6 +51,9 @@ class HyperOs4SuperIslandTest {
 
         val disconnected = connectedState().copy(relayConnected = false)
         assertEquals(SuperIslandPhase.DISCONNECTED, superIslandPresentation(disconnected, now)?.phase)
+
+        val offline = connectedState().copy(offlineMode = true, relayConnected = false, macConnected = false, appServerReady = false)
+        assertEquals(SuperIslandPhase.OFFLINE, superIslandPresentation(offline, now)?.phase)
     }
 
     private fun connectedState() = BridgeUiState(

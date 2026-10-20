@@ -30,6 +30,7 @@ class ConversationSendReadinessTest {
     fun readyRequiresEveryLayerAndPreparedThread() {
         assertEquals(ConversationSendReadiness.READY, conversationSendReadiness(state()))
         assertEquals(ConversationSendReadiness.RELAY_OFFLINE, conversationSendReadiness(state(relay = false)))
+        assertEquals(ConversationSendReadiness.OFFLINE_MODE, conversationSendReadiness(state().copy(offlineMode = true)))
         assertEquals(ConversationSendReadiness.MAC_OFFLINE, conversationSendReadiness(state(mac = false)))
         assertEquals(ConversationSendReadiness.CODEX_NOT_READY, conversationSendReadiness(state(codex = false)))
         assertEquals(

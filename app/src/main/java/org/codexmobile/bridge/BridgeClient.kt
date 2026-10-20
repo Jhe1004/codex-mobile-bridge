@@ -70,6 +70,8 @@ object BridgeClient {
     private val selectedCacheGeneration = AtomicLong(0)
     @Volatile private var manualSyncId: String? = null
     @Volatile private var conversationCache: ConversationCacheStore? = null
+    @Volatile private var catalogCache: CatalogCacheStore? = null
+    private val catalogRestoreStarted = AtomicBoolean(false)
     @Volatile private var activeTransferId: String? = null
     @Volatile private var activeTransferFile: File? = null
     private var reconnectDelay = 1_000L
@@ -83,19 +85,74 @@ object BridgeClient {
     fun start(context: Context) {
         appContext = context.applicationContext
         if (conversationCache == null) conversationCache = ConversationCacheStore.forContext(context.applicationContext)
+        if (catalogCache == null) catalogCache = CatalogCacheStore.forContext(context.applicationContext)
+        if (catalogRestoreStarted.compareAndSet(false, true)) {
+            scope.launch {
+                val cached = catalogCache?.load() ?: return@launch
+                _state.update { current ->
+                    if (current.projects.isNotEmpty() || current.threads.isNotEmpty()) current else current.copy(
+                        projects = cached.projects.sortedBy { it.order },
+                        threads = cached.threads,
+                        expandedProjectIds = cached.projects.map { it.id }.toSet(),
+                        projectExpansionInitialized = cached.projects.isNotEmpty(),
+                    )
+                }
+            }
+        }
+        if (_state.value.offlineMode) return
         if (connectionJob?.isActive == true) return
         connectionJob = scope.launch { connectionLoop() }
     }
 
     fun ensureConnected(context: Context) {
         start(context)
+        if (_state.value.offlineMode) return
         if (lastRelayMessageAtMs > 0L && SystemClock.elapsedRealtime() - lastRelayMessageAtMs > 35_000L) {
-            forceReconnect()
+            enterOfflineMode("连接超时，已切换为离线阅读")
         }
     }
 
     fun forceReconnect() {
-        _state.value = _state.value.copy(connection = "正在重新连接…", relayConnected = false)
+        resumeOnline()
+    }
+
+    fun resumeOnline() {
+        val context = appContext ?: return
+        _state.value = _state.value.copy(
+            offlineMode = false,
+            connection = "正在重新连接 Mac…",
+            relayConnected = false,
+            macConnected = false,
+            appServerReady = false,
+            error = null,
+        )
+        if (connectionJob?.isActive == true) return
+        connectionJob = null
+        start(context)
+    }
+
+    private fun enterOfflineMode(reason: String) {
+        if (_state.value.offlineMode) return
+        Log.i("CodexMobile", "Entering offline reading mode: $reason")
+        _state.value = _state.value.copy(
+            offlineMode = true,
+            connection = "离线阅读",
+            relayConnected = false,
+            macConnected = false,
+            appServerReady = false,
+            preparingThreadId = null,
+            preparedThreadId = null,
+            manualSyncVisible = false,
+            manualSyncInProgress = false,
+            activeTurnId = null,
+            threads = _state.value.threads.map { thread ->
+                if (thread.activity == ThreadActivity.RUNNING) thread.copy(activity = ThreadActivity.IDLE) else thread
+            },
+            selectedThread = _state.value.selectedThread?.let { thread ->
+                if (thread.activity == ThreadActivity.RUNNING) thread.copy(activity = ThreadActivity.IDLE) else thread
+            },
+            error = null,
+        )
         webSocket?.cancel()
         webSocket = null
     }
@@ -112,6 +169,10 @@ object BridgeClient {
 
     fun refreshRecentThreads(manual: Boolean = false) {
         val current = _state.value
+        if (current.offlineMode) {
+            if (manual) resumeOnline()
+            return
+        }
         if (!current.relayConnected || !current.macConnected || !current.appServerReady) {
             if (manual) failManualSync("Mac 或 Codex 尚未连接")
             return
@@ -178,6 +239,10 @@ object BridgeClient {
     }
 
     fun refreshHome() {
+        if (_state.value.offlineMode) {
+            resumeOnline()
+            return
+        }
         if (webSocket == null || !_state.value.relayConnected || !_state.value.macConnected) {
             forceReconnect()
             return
@@ -274,6 +339,20 @@ object BridgeClient {
                     if (current.selectedThread?.id != selected.id) current else current.copy(messages = cached.messages)
                 }
             }
+            if (_state.value.offlineMode) {
+                _state.update { current ->
+                    if (current.selectedThread?.id != selected.id) current else current.copy(
+                        conversationContentState = if (cached != null) {
+                            ConversationContentState.CACHED_CURRENT
+                        } else {
+                            ConversationContentState.NONE
+                        },
+                        loadedContentRevision = cached?.contentRevision.orEmpty(),
+                        error = if (cached == null) "这条会话尚未保存到手机，联网后打开一次即可离线阅读" else null,
+                    )
+                }
+                return@launch
+            }
             if (cacheMatchesThread(cached, selected) && selected.activity != ThreadActivity.RUNNING) {
                 _state.update { current ->
                     if (current.selectedThread?.id != selected.id) current else current.copy(
@@ -295,7 +374,7 @@ object BridgeClient {
                 refreshSelectedThread(showSyncing = true)
             }
         }
-        prepareSelectedThread()
+        if (!_state.value.offlineMode) prepareSelectedThread()
     }
 
     private fun prepareSelectedThread() {
@@ -353,6 +432,7 @@ object BridgeClient {
     }
 
     fun refreshSelectedThread(showSyncing: Boolean = false) {
+        if (_state.value.offlineMode) return
         val threadId = _state.value.selectedThread?.id ?: return
         if (!latestSyncInFlight.add(threadId)) return
         if (showSyncing) {
@@ -385,6 +465,10 @@ object BridgeClient {
 
     fun refreshSelectedSession() {
         if (_state.value.selectedThread == null) return
+        if (_state.value.offlineMode) {
+            resumeOnline()
+            return
+        }
         _state.value = _state.value.copy(error = null)
         refreshSelectedThread(showSyncing = true)
     }
@@ -426,6 +510,7 @@ object BridgeClient {
     }
 
     fun newThread(project: ProjectSummary) {
+        if (_state.value.offlineMode) return
         request("thread.start", JSONObject().put("ephemeral", false).put("cwd", project.rootPath)) { result ->
             val thread = result.optJSONObject("thread") ?: return@request
             val summary = threadSummary(thread, project.id)
@@ -977,7 +1062,7 @@ object BridgeClient {
     }
 
     private suspend fun connectionLoop() {
-        while (true) {
+        while (!_state.value.offlineMode) {
             try {
                 _state.value = _state.value.copy(connection = "正在连接 Mac…", error = null)
                 connectOnce()
@@ -988,7 +1073,7 @@ object BridgeClient {
                     val silentForMs = SystemClock.elapsedRealtime() - lastRelayMessageAtMs
                     if (silentForMs > 35_000L) {
                         Log.w("CodexMobile", "Relay heartbeat timed out after ${silentForMs}ms")
-                        forceReconnect()
+                        enterOfflineMode("连接超时")
                         break
                     }
                     request("status", JSONObject(), onError = {}) { result ->
@@ -998,15 +1083,11 @@ object BridgeClient {
                 }
             } catch (t: Throwable) {
                 Log.e("CodexMobile", "Connection loop failed", t)
-                _state.value = _state.value.copy(
-                    connection = "连接中断，正在重试…",
-                    relayConnected = false,
-                    macConnected = false,
-                    error = t.message,
-                )
+                enterOfflineMode(t.message ?: "连接失败")
             } finally {
                 closeTransport()
             }
+            if (_state.value.offlineMode) break
             delay(reconnectDelay)
             reconnectDelay = (reconnectDelay * 2).coerceAtMost(30_000L)
         }
@@ -1053,18 +1134,13 @@ object BridgeClient {
             }
 
             override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
-                _state.value = _state.value.copy(
-                    connection = "连接失败",
-                    relayConnected = false,
-                    preparingThreadId = null,
-                    preparedThreadId = null,
-                    error = t.message,
-                )
                 webSocket = null
+                enterOfflineMode(t.message ?: "连接失败")
             }
 
             override fun onClosed(ws: WebSocket, code: Int, reason: String) {
                 webSocket = null
+                if (!_state.value.offlineMode) enterOfflineMode(reason.ifBlank { "连接已关闭" })
             }
             }
         )
@@ -1135,6 +1211,10 @@ object BridgeClient {
         onError: (String) -> Unit = { message -> _state.value = _state.value.copy(error = message) },
         onResult: (JSONObject) -> Unit,
     ) {
+        if (_state.value.offlineMode) {
+            onError("当前处于离线阅读模式")
+            return
+        }
         val id = UUID.randomUUID().toString()
         val startedAtNanos = SystemClock.elapsedRealtimeNanos()
         pending[id] = { result ->
@@ -1183,6 +1263,10 @@ object BridgeClient {
         when (message.optString("type")) {
             "relay.ready" -> {
                 val mac = message.optBoolean("macConnected")
+                if (!mac) {
+                    enterOfflineMode("Mac 当前离线")
+                    return
+                }
                 _state.value = _state.value.copy(macConnected = mac, connection = if (mac) "已连接" else "Mac 离线")
                 refreshThreads()
                 request("status", JSONObject()) { result ->
@@ -1193,6 +1277,10 @@ object BridgeClient {
             "relay.status" -> {
                 val wasConnected = _state.value.macConnected
                 val macConnected = message.optBoolean("macConnected")
+                if (!macConnected) {
+                    enterOfflineMode("Mac 连接已断开")
+                    return
+                }
                 _state.value = _state.value.copy(
                     macConnected = macConnected,
                     preparingThreadId = if (macConnected) _state.value.preparingThreadId else null,
@@ -1345,6 +1433,7 @@ object BridgeClient {
             selectedProject = selectedProject,
             selectedThread = refreshedSelectedThread,
         )
+        scope.launch { catalogCache?.save(projects, items) }
         if (allowSelectedRefresh && refreshedSelectedThread != null &&
             previous.loadedContentRevision.isNotBlank() &&
             refreshedSelectedThread.contentRevision.isNotBlank() &&

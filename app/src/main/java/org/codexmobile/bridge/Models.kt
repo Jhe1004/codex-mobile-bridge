@@ -16,6 +16,7 @@ enum class ConversationContentState {
 
 enum class ConversationSendReadiness {
     READY,
+    OFFLINE_MODE,
     NO_THREAD,
     RELAY_OFFLINE,
     MAC_OFFLINE,
@@ -31,6 +32,7 @@ enum class ConversationSendReadiness {
 internal fun conversationSendReadiness(state: BridgeUiState): ConversationSendReadiness {
     val thread = state.selectedThread ?: return ConversationSendReadiness.NO_THREAD
     return when {
+        state.offlineMode -> ConversationSendReadiness.OFFLINE_MODE
         !state.relayConnected -> ConversationSendReadiness.RELAY_OFFLINE
         !state.macConnected -> ConversationSendReadiness.MAC_OFFLINE
         !state.appServerReady -> ConversationSendReadiness.CODEX_NOT_READY
@@ -165,6 +167,7 @@ data class FilePreview(
 
 data class BridgeUiState(
     val connection: String = "正在启动…",
+    val offlineMode: Boolean = false,
     val relayConnected: Boolean = false,
     val macConnected: Boolean = false,
     val appServerReady: Boolean = false,

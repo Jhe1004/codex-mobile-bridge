@@ -50,6 +50,7 @@ internal enum class SuperIslandPhase {
     APPROVAL,
     TRANSFERRING,
     DISCONNECTED,
+    OFFLINE,
 }
 
 internal data class SuperIslandPresentation(
@@ -79,6 +80,12 @@ internal fun superIslandPresentation(
     val detail: String
     val color: String
     when {
+        state.offlineMode -> {
+            phase = SuperIslandPhase.OFFLINE
+            status = "离线阅读"
+            detail = "正在显示手机缓存"
+            color = "#6B6B6B"
+        }
         !state.relayConnected -> {
             phase = SuperIslandPhase.DISCONNECTED
             status = "手机连接中断"
@@ -311,7 +318,10 @@ internal class HyperOs4SuperIslandController(
             .put("frontTitle", presentation.threadTitle)
             .put("title", presentation.status)
             .put("content", presentation.detail)
-            .put("useHighLight", presentation.phase != SuperIslandPhase.DISCONNECTED)
+            .put(
+                "useHighLight",
+                presentation.phase != SuperIslandPhase.DISCONNECTED && presentation.phase != SuperIslandPhase.OFFLINE,
+            )
         val imageTextInfo = JSONObject()
             .put("type", 1)
             .put("picInfo", picInfo)

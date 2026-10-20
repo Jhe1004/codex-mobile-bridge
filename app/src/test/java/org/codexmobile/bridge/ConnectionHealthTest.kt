@@ -22,6 +22,11 @@ class ConnectionHealthTest {
     }
 
     @Test
+    fun explicitOfflineModeIsNotReportedAsAConnectionFailure() {
+        assertEquals(ConnectionHealth.OFFLINE, connectionHealth(false, false, false, offlineMode = true))
+    }
+
+    @Test
     fun selectedConnectedThreadIsReadyWithoutDesktopWake() {
         assertEquals(
             SessionConnectionHealth.READY,

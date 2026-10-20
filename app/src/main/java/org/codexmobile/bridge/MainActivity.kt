@@ -141,6 +141,7 @@ internal enum class ConnectionHealth {
     HEALTHY,
     DEGRADED,
     DISCONNECTED,
+    OFFLINE,
 }
 
 internal enum class SessionConnectionHealth {
@@ -153,7 +154,9 @@ internal fun connectionHealth(
     relayConnected: Boolean,
     macConnected: Boolean,
     appServerReady: Boolean,
+    offlineMode: Boolean = false,
 ): ConnectionHealth = when {
+    offlineMode -> ConnectionHealth.OFFLINE
     relayConnected && macConnected && appServerReady -> ConnectionHealth.HEALTHY
     relayConnected -> ConnectionHealth.DEGRADED
     else -> ConnectionHealth.DISCONNECTED
@@ -173,16 +176,18 @@ internal fun sessionConnectionHealth(
 
 @Composable
 private fun HeartbeatStatusIndicator(state: BridgeUiState, onClick: () -> Unit) {
-    val health = connectionHealth(state.relayConnected, state.macConnected, state.appServerReady)
+    val health = connectionHealth(state.relayConnected, state.macConnected, state.appServerReady, state.offlineMode)
     val color = when (health) {
         ConnectionHealth.HEALTHY -> Accent
         ConnectionHealth.DEGRADED -> Color(0xFFD99020)
         ConnectionHealth.DISCONNECTED -> Color(0xFFC7372F)
+        ConnectionHealth.OFFLINE -> Muted
     }
     val description = when (health) {
         ConnectionHealth.HEALTHY -> "连接正常：手机、Mac 和 Codex 均在线"
         ConnectionHealth.DEGRADED -> "连接不完整：手机已连接，但 Mac 或 Codex 暂时不可用"
         ConnectionHealth.DISCONNECTED -> "连接已断开"
+        ConnectionHealth.OFFLINE -> "离线阅读模式，点击尝试重新连接"
     }
     val transition = rememberInfiniteTransition(label = "connection-heartbeat")
     val pulse by transition.animateFloat(
@@ -194,7 +199,7 @@ private fun HeartbeatStatusIndicator(state: BridgeUiState, onClick: () -> Unit) 
         ),
         label = "heartbeat-pulse",
     )
-    val visiblePulse = if (health == ConnectionHealth.DISCONNECTED) 0.45f else pulse
+    val visiblePulse = if (health == ConnectionHealth.DISCONNECTED || health == ConnectionHealth.OFFLINE) 0.45f else pulse
 
     IconButton(
         onClick = onClick,
@@ -284,11 +289,13 @@ private fun SessionHeartbeatIndicator(state: BridgeUiState, onClick: () -> Unit)
         preparingThreadId = state.preparingThreadId,
     )
     val color = when (health) {
-        SessionConnectionHealth.READY -> Accent
+        SessionConnectionHealth.READY -> if (state.offlineMode) Muted else Accent
         SessionConnectionHealth.PREPARING -> Color(0xFFD99020)
-        SessionConnectionHealth.UNHEALTHY -> Color(0xFFC7372F)
+        SessionConnectionHealth.UNHEALTHY -> if (state.offlineMode) Muted else Color(0xFFC7372F)
     }
-    val description = when (health) {
+    val description = if (state.offlineMode) {
+        "离线阅读模式，点击尝试重新连接"
+    } else when (health) {
         SessionConnectionHealth.READY -> "会话连接健康，点击检查新内容"
         SessionConnectionHealth.PREPARING -> "正在连接会话以发送消息"
         SessionConnectionHealth.UNHEALTHY -> "会话连接不健康，点击重新连接并刷新"
@@ -406,7 +413,19 @@ private fun ProjectTreeScreen(state: BridgeUiState, onBatterySettings: () -> Uni
     ) { padding ->
         LazyColumn(modifier = Modifier.padding(padding).fillMaxSize()) {
             item {
-                if (!state.relayConnected || !state.macConnected || !state.appServerReady) {
+                if (state.offlineMode) {
+                    Card(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp).fillMaxWidth(),
+                        shape = RoundedCornerShape(20.dp),
+                        border = BorderStroke(1.dp, OutlineSoft),
+                    ) {
+                        Column(Modifier.padding(16.dp)) {
+                            Text("离线阅读模式", fontWeight = FontWeight.SemiBold)
+                            Text("正在显示手机中已经保存的项目和会话，不会继续连接 Mac。", color = Muted, modifier = Modifier.padding(top = 6.dp))
+                            OutlinedButton(onClick = BridgeClient::resumeOnline, modifier = Modifier.padding(top = 10.dp)) { Text("尝试重新连接") }
+                        }
+                    }
+                } else if (!state.relayConnected || !state.macConnected || !state.appServerReady) {
                     Card(
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp).fillMaxWidth(),
                         shape = RoundedCornerShape(20.dp),
@@ -461,7 +480,10 @@ private fun ProjectTreeScreen(state: BridgeUiState, onBatterySettings: () -> Uni
                                 }
                             }
                             if (project.rootPath.isNotBlank()) {
-                                IconButton(onClick = { BridgeClient.newThread(project) }) { Icon(Icons.Default.Add, "在这个项目中新建会话", tint = Ink) }
+                                IconButton(
+                                    onClick = { BridgeClient.newThread(project) },
+                                    enabled = !state.offlineMode,
+                                ) { Icon(Icons.Default.Add, "在这个项目中新建会话", tint = if (state.offlineMode) Muted else Ink) }
                             }
                         }
                     }
@@ -562,12 +584,14 @@ private fun ChatScreen(state: BridgeUiState) {
     val sessionReadyToSend = sendReadiness == ConversationSendReadiness.READY
     val composerHint = when (sendReadiness) {
         ConversationSendReadiness.READY -> "询问 Codex"
+        ConversationSendReadiness.OFFLINE_MODE -> "离线阅读模式"
         ConversationSendReadiness.DELIVERY_UNCONFIRMED,
         ConversationSendReadiness.SEND_PENDING -> "正在确认上一条消息…"
         ConversationSendReadiness.TURN_RUNNING -> "等待当前回复完成…"
         else -> "会话准备完成后可发送"
     }
     val threadStatus = when {
+        state.offlineMode -> "离线阅读 · 手机缓存"
         !state.relayConnected || !state.macConnected -> state.connection
         state.conversationContentState == ConversationContentState.LOADING_CACHE -> "正在读取本地记录…"
         state.conversationContentState == ConversationContentState.SYNCING -> "正在检查新内容…"
@@ -634,7 +658,7 @@ private fun ChatScreen(state: BridgeUiState) {
                             modifier = Modifier.fillMaxWidth().padding(start = 5.dp, end = 6.dp, top = 3.dp, bottom = 3.dp),
                             verticalAlignment = Alignment.Bottom,
                         ) {
-                            val canAttach = state.activeTurnId == null && !state.sendPending && state.composerAttachments.size < 10
+                            val canAttach = !state.offlineMode && state.activeTurnId == null && !state.sendPending && state.composerAttachments.size < 10
                             IconButton(
                                 onClick = { attachmentPicker.launch(arrayOf("*/*")) },
                                 enabled = canAttach,
@@ -643,6 +667,7 @@ private fun ChatScreen(state: BridgeUiState) {
                             OutlinedTextField(
                                 value = input,
                                 onValueChange = { input = it },
+                                enabled = !state.offlineMode,
                                 modifier = Modifier.weight(1f),
                                 placeholder = {
                                     Text(

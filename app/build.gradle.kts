@@ -14,8 +14,8 @@ android {
         applicationId = "org.codexmobile.bridge"
         minSdk = 28
         targetSdk = 36
-        versionCode = 41
-        versionName = "0.24.0"
+        versionCode = 42
+        versionName = "0.25.0"
 
         manifestPlaceholders["xiaomiSuperIslandAppId"] = xiaomiSuperIslandAppId
         manifestPlaceholders["xiaomiSuperIslandDebug"] = "true"
