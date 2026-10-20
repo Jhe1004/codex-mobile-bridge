@@ -22,6 +22,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
@@ -212,7 +213,7 @@ internal fun MarkdownText(
     quoteSurface: Color,
     onLink: (String) -> Unit,
 ) {
-    val linkColor = if (color == Color.White) Color(0xFFCDEBFF) else Color(0xFF176B87)
+    val linkColor = if (color.luminance() > 0.5f) Color(0xFF8CCBFF) else Color(0xFF176B87)
     val blocks = remember(text) { parseMarkdown(text) }
     Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
         blocks.forEach { block ->

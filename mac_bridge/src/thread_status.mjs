@@ -84,11 +84,11 @@ export function createThreadStatusAnalyzer({ maxInspectedThreads = 60 } = {}) {
         ...thread,
         mobileActivity: activity,
         contentRevision: signature || fallbackRevision(thread),
-        // Keep the revision format stable whether or not this thread was among
-        // the rollout files inspected during this refresh. The terminal turn
-        // id is still used to classify activity, while updatedAt is the durable
-        // read/unread cursor sent to Android.
-        completionRevision: fallbackRevision(thread),
+        // Unread state must follow a real completed turn. Codex can change
+        // updatedAt for metadata-only writes, which must never create a false
+        // "new reply" badge on Android. Threads outside the inspected window
+        // deliberately expose no completion cursor instead of guessing.
+        completionRevision: observed?.completionRevision ?? "",
         completedAt: observed?.completedAt ?? 0,
       };
     });

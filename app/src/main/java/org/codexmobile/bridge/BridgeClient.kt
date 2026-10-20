@@ -76,7 +76,9 @@ object BridgeClient {
     @Volatile private var activeTransferFile: File? = null
     private var reconnectDelay = 1_000L
     private const val SEQUENCE_PREFS = "relay_sequence_v2"
-    private const val THREAD_READ_PREFS = "thread_read_state_v1"
+    // v2 replaces the old updatedAt-based cursor with stable completed-turn IDs.
+    // Starting a fresh baseline also clears false unread badges created by v1.
+    private const val THREAD_READ_PREFS = "thread_read_state_v2"
     private const val THREAD_READ_INITIALIZED = "__initialized__"
     private const val RECENT_SYNC_PREFS = "recent_thread_sync_v1"
     @Volatile private var sequenceKey = "default"

@@ -35,8 +35,8 @@ const annotated = annotate([
   { id: "native-active", updatedAt: 30, status: { type: "active" } },
 ]);
 assert.deepEqual(annotated.map((thread) => thread.mobileActivity), ["running", "idle", "running"]);
-assert.equal(annotated[1].completionRevision, "updated:20");
+assert.equal(annotated[1].completionRevision, "done-turn");
 assert.match(annotated[1].contentRevision, /^file:/);
-assert.equal(annotated[2].completionRevision, "updated:30");
+assert.equal(annotated[2].completionRevision, "");
 
 console.log("thread status projection: ok");

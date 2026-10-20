@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -59,7 +60,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.lightColorScheme
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.animation.core.RepeatMode
@@ -76,11 +77,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -92,7 +95,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(Color.Black.toArgb()),
+            navigationBarStyle = SystemBarStyle.dark(Color.Black.toArgb()),
+        )
         if (Build.VERSION.SDK_INT >= 33) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         ContextCompat.startForegroundService(this, Intent(this, BridgeService::class.java))
         setContent { CodexMobileApp(onBatterySettings = ::openBatterySettings) }
@@ -113,20 +119,20 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private val Ink = Color(0xFF0D0D0D)
-private val Paper = Color(0xFFFFFFFF)
-private val SoftSurface = Color(0xFFF7F7F8)
-private val SoftSurfaceStrong = Color(0xFFF1F1F1)
-private val OutlineSoft = Color(0xFFE5E5E5)
-private val Muted = Color(0xFF6B6B6B)
+private val Ink = Color(0xFFF5F5F5)
+private val Paper = Color(0xFF000000)
+private val SoftSurface = Color(0xFF121212)
+private val SoftSurfaceStrong = Color(0xFF202020)
+private val OutlineSoft = Color(0xFF333333)
+private val Muted = Color(0xFFA3A3A3)
 private val Accent = Color(0xFF10A37F)
-private val UnreadBlue = Color(0xFF3B82F6)
+private val UnreadBlue = Color(0xFF60A5FA)
 
-private val ChatGptColorScheme = lightColorScheme(
-    primary = Ink,
-    onPrimary = Color.White,
-    secondary = Muted,
-    onSecondary = Color.White,
+private val ChatGptColorScheme = darkColorScheme(
+    primary = Color.White,
+    onPrimary = Color.Black,
+    secondary = Accent,
+    onSecondary = Color.Black,
     background = Paper,
     onBackground = Ink,
     surface = Paper,
@@ -134,7 +140,7 @@ private val ChatGptColorScheme = lightColorScheme(
     surfaceVariant = SoftSurface,
     onSurfaceVariant = Ink,
     outline = OutlineSoft,
-    error = Color(0xFFC7372F),
+    error = Color(0xFFFF6B6B),
 )
 
 internal enum class ConnectionHealth {
@@ -574,17 +580,19 @@ private fun ThreadActivityIndicator(activity: ThreadActivity) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ChatScreen(state: BridgeUiState) {
-    var input by remember { mutableStateOf("") }
+    val threadId = state.selectedThread?.id
+    val context = LocalContext.current
+    val draftStore = remember { ConversationDraftStore.forContext(context) }
+    var input by remember(threadId) { mutableStateOf(draftStore.load(threadId.orEmpty())) }
     val attachmentPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         BridgeClient.addAttachments(uris)
     }
     val listState = rememberLazyListState()
-    val threadId = state.selectedThread?.id
     val sendReadiness = conversationSendReadiness(state)
     val sessionReadyToSend = sendReadiness == ConversationSendReadiness.READY
     val composerHint = when (sendReadiness) {
         ConversationSendReadiness.READY -> "询问 Codex"
-        ConversationSendReadiness.OFFLINE_MODE -> "离线阅读模式"
+        ConversationSendReadiness.OFFLINE_MODE -> "离线草稿（联网后可发送）"
         ConversationSendReadiness.DELIVERY_UNCONFIRMED,
         ConversationSendReadiness.SEND_PENDING -> "正在确认上一条消息…"
         ConversationSendReadiness.TURN_RUNNING -> "等待当前回复完成…"
@@ -666,8 +674,11 @@ private fun ChatScreen(state: BridgeUiState) {
                             ) { Icon(Icons.Default.AttachFile, "添加图片或文件", tint = if (canAttach) Ink else Muted) }
                             OutlinedTextField(
                                 value = input,
-                                onValueChange = { input = it },
-                                enabled = !state.offlineMode,
+                                onValueChange = {
+                                    input = it
+                                    draftStore.save(threadId.orEmpty(), it)
+                                },
+                                enabled = true,
                                 modifier = Modifier.weight(1f),
                                 placeholder = {
                                     Text(
@@ -691,13 +702,24 @@ private fun ChatScreen(state: BridgeUiState) {
                                 sessionReadyToSend &&
                                 state.composerAttachments.none { it.status != AttachmentUploadStatus.READY }
                             IconButton(
-                                onClick = { BridgeClient.send(input) { input = "" } },
+                                onClick = {
+                                    BridgeClient.send(input) {
+                                        input = ""
+                                        draftStore.clear(threadId.orEmpty())
+                                    }
+                                },
                                 enabled = canSend,
                                 modifier = Modifier
                                     .padding(start = 4.dp, bottom = 5.dp)
                                     .size(42.dp)
-                                    .background(if (canSend) Ink else Color(0xFFD7D7D7), CircleShape),
-                            ) { Icon(Icons.AutoMirrored.Filled.Send, "发送", tint = Color.White) }
+                                    .background(if (canSend) Color.White else Color(0xFF2F2F2F), CircleShape),
+                            ) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.Send,
+                                    "发送",
+                                    tint = if (canSend) Color.Black else Color(0xFF777777),
+                                )
+                            }
                         }
                     }
                 }
@@ -773,8 +795,8 @@ private fun MessageBubble(message: ChatMessage) {
                     MarkdownText(
                         text = message.text,
                         color = Ink,
-                        codeSurface = Color(0xFFF1F1F1),
-                        quoteSurface = Color(0xFFF7F7F7),
+                        codeSurface = Color(0xFF1A1A1A),
+                        quoteSurface = Color(0xFF121212),
                         onLink = { target ->
                             if (target.startsWith("https://") || target.startsWith("http://")) uriHandler.openUri(target)
                             else BridgeClient.downloadFile(target)
