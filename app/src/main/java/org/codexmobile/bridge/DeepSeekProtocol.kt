@@ -24,12 +24,19 @@ internal object DeepSeekProtocol {
     fun requestBody(
         messages: List<DeepSeekMessage>,
         context: DeepSeekConversationContext? = null,
+        preferredName: String = "",
     ): String {
+        val normalizedName = preferredName.trim().replace("\n", " ").take(24)
+        val addressingRule = if (normalizedName.isBlank()) {
+            "通常直接回答问题，不需要添加称呼。"
+        } else {
+            "通常直接回答问题，不需要每次添加称呼；如果确实需要称呼用户，只使用“$normalizedName”。"
+        }
         val apiMessages = JSONArray().apply {
             put(
                 JSONObject()
                     .put("role", "system")
-                    .put("content", "请用简体中文清楚、直接地回答用户。用 Markdown 组织需要分层的内容。"),
+                    .put("content", "请用简体中文清楚、直接地回答用户。用 Markdown 组织需要分层的内容。$addressingRule"),
             )
             context?.takeIf { it.messages.isNotEmpty() }?.let { hiddenContext ->
                 put(
@@ -60,8 +67,8 @@ internal object DeepSeekProtocol {
         val choice = root.optJSONArray("choices")?.optJSONObject(0) ?: return null
         val delta = choice.optJSONObject("delta") ?: JSONObject()
         return DeepSeekStreamDelta(
-            reasoning = delta.optString("reasoning_content"),
-            content = delta.optString("content"),
+            reasoning = delta.nonNullString("reasoning_content"),
+            content = delta.nonNullString("content"),
             finished = !choice.isNull("finish_reason"),
         )
     }
@@ -81,3 +88,9 @@ internal object DeepSeekProtocol {
 
     private const val MAX_CONTEXT_MESSAGES = 40
 }
+
+internal fun sanitizeDeepSeekText(text: String): String = text.replace(REPEATED_JSON_NULL, "")
+
+private fun JSONObject.nonNullString(name: String): String = if (isNull(name)) "" else optString(name, "")
+
+private val REPEATED_JSON_NULL = Regex("(?:null){3,}")

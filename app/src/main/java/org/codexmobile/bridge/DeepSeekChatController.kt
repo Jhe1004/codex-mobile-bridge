@@ -37,11 +37,13 @@ internal data class DeepSeekUiState(
     val error: String? = null,
     val hasApiKey: Boolean = false,
     val attachedContext: DeepSeekConversationContext? = null,
+    val preferredName: String = "",
 )
 
 internal class DeepSeekChatController(context: Context) {
     private val appContext = context.applicationContext
     private val credentialStore = DeepSeekCredentialStore(appContext)
+    private val settingsStore = DeepSeekSettingsStore(appContext)
     private val chatStore = DeepSeekChatStore(appContext)
     private val client = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
@@ -56,15 +58,18 @@ internal class DeepSeekChatController(context: Context) {
             messages = chatStore.load(currentSessionKey),
             draft = chatStore.loadDraft(currentSessionKey),
             hasApiKey = credentialStore.load().isNotBlank(),
+            preferredName = settingsStore.loadPreferredName(),
         ),
     )
     val state: StateFlow<DeepSeekUiState> = mutableState.asStateFlow()
 
-    fun saveApiKey(apiKey: String): Boolean {
+    fun saveSettings(apiKey: String, preferredName: String): Boolean {
         val normalized = apiKey.trim()
-        if (normalized.isBlank()) return false
-        credentialStore.save(normalized)
-        mutableState.update { it.copy(hasApiKey = true, error = null) }
+        val alreadyHasKey = credentialStore.load().isNotBlank()
+        if (normalized.isBlank() && !alreadyHasKey) return false
+        if (normalized.isNotBlank()) credentialStore.save(normalized)
+        val savedName = settingsStore.savePreferredName(preferredName)
+        mutableState.update { it.copy(hasApiKey = true, preferredName = savedName, error = null) }
         return true
     }
 
@@ -160,7 +165,11 @@ internal class DeepSeekChatController(context: Context) {
             .header("Authorization", "Bearer $apiKey")
             .header("Accept", "text/event-stream")
             .post(
-                DeepSeekProtocol.requestBody(requestMessages, mutableState.value.attachedContext)
+                DeepSeekProtocol.requestBody(
+                    messages = requestMessages,
+                    context = mutableState.value.attachedContext,
+                    preferredName = mutableState.value.preferredName,
+                )
                     .toRequestBody("application/json; charset=utf-8".toMediaType()),
             )
             .build()
@@ -336,18 +345,41 @@ private class DeepSeekCredentialStore(context: Context) {
     }
 }
 
+private class DeepSeekSettingsStore(context: Context) {
+    private val preferences = context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
+
+    fun loadPreferredName(): String = preferences.getString(PREFERRED_NAME_KEY, "").orEmpty()
+
+    fun savePreferredName(value: String): String {
+        val normalized = value.trim().replace("\n", " ").take(24)
+        preferences.edit().apply {
+            if (normalized.isBlank()) remove(PREFERRED_NAME_KEY) else putString(PREFERRED_NAME_KEY, normalized)
+        }.apply()
+        return normalized
+    }
+
+    companion object {
+        private const val PREFERENCES_NAME = "deepseek_settings_v1"
+        private const val PREFERRED_NAME_KEY = "preferred_name"
+    }
+}
+
 private class DeepSeekChatStore(context: Context) {
     private val preferences = context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
 
+    init {
+        sanitizeAllPersistedHistories()
+    }
+
     fun load(sessionKey: String): List<DeepSeekMessage> {
         val raw = preferences.getString(historyKey(sessionKey), null) ?: return emptyList()
-        return runCatching {
+        val messages = runCatching {
             val array = JSONArray(raw)
             buildList {
                 for (index in 0 until array.length()) {
                     val item = array.getJSONObject(index)
                     val role = item.optString("role")
-                    val text = item.optString("text")
+                    val text = sanitizeDeepSeekText(item.optString("text"))
                     if ((role == "user" || role == "assistant") && text.isNotBlank()) {
                         add(
                             DeepSeekMessage(
@@ -361,6 +393,10 @@ private class DeepSeekChatStore(context: Context) {
                 }
             }
         }.getOrElse { emptyList() }
+        if (messages.any { it.text.contains(REPEATED_NULL_SENTINEL) }.not() && raw.contains(REPEATED_NULL_SENTINEL)) {
+            save(sessionKey, messages)
+        }
+        return messages
     }
 
     fun save(sessionKey: String, messages: List<DeepSeekMessage>) {
@@ -409,11 +445,36 @@ private class DeepSeekChatStore(context: Context) {
         return digest.take(12).joinToString("") { "%02x".format(it) }
     }
 
+    private fun sanitizeAllPersistedHistories() {
+        val editor = preferences.edit()
+        var changed = false
+        preferences.all.forEach { (key, value) ->
+            if (
+                value !is String ||
+                (key != HISTORY_KEY && !key.startsWith("${HISTORY_KEY}_")) ||
+                !value.contains(REPEATED_NULL_SENTINEL)
+            ) return@forEach
+            runCatching {
+                val array = JSONArray(value)
+                for (index in 0 until array.length()) {
+                    val item = array.optJSONObject(index) ?: continue
+                    val original = item.optString("text")
+                    val sanitized = sanitizeDeepSeekText(original)
+                    if (sanitized != original) item.put("text", sanitized)
+                }
+                editor.putString(key, array.toString())
+                changed = true
+            }
+        }
+        if (changed) editor.apply()
+    }
+
     companion object {
         private const val PREFERENCES_NAME = "deepseek_chat_v1"
         private const val HISTORY_KEY = "messages"
         private const val DRAFT_KEY = "draft"
         private const val MAX_SAVED_MESSAGES = 80
         private const val STANDALONE_SESSION = "standalone"
+        private const val REPEATED_NULL_SENTINEL = "nullnullnull"
     }
 }

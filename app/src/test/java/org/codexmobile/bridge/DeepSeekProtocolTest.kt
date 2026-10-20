@@ -62,6 +62,30 @@ class DeepSeekProtocolTest {
     }
 
     @Test
+    fun treatsJsonNullStreamFieldsAsEmptyInsteadOfLiteralNullText() {
+        val delta = DeepSeekProtocol.parseStreamData(
+            """{"choices":[{"delta":{"reasoning_content":null,"content":null},"finish_reason":null}]}""",
+        )
+
+        assertEquals("", delta?.reasoning)
+        assertEquals("", delta?.content)
+        assertFalse(delta?.finished == true)
+    }
+
+    @Test
+    fun cleansPreviouslyPersistedNullFloodAndUsesConfiguredAddress() {
+        assertEquals("前文后文", sanitizeDeepSeekText("前文nullnullnullnull后文"))
+
+        val body = DeepSeekProtocol.requestBody(
+            messages = listOf(DeepSeekMessage("1", "user", "测试")),
+            preferredName = "健",
+        )
+        val system = JSONObject(body).getJSONArray("messages").getJSONObject(0).getString("content")
+        assertTrue(system.contains("只使用“健”"))
+        assertTrue(system.contains("不需要每次添加称呼"))
+    }
+
+    @Test
     fun turnsSensitiveApiErrorsIntoReadableMessages() {
         assertEquals(
             "DeepSeek API 密钥无效，请重新设置。",

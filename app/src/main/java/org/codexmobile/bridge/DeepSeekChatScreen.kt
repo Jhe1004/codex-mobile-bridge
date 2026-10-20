@@ -256,9 +256,10 @@ internal fun DeepSeekChatScreen(
     if (showKeyDialog) {
         DeepSeekApiKeyDialog(
             hasExistingKey = state.hasApiKey,
+            preferredName = state.preferredName,
             onDismiss = { showKeyDialog = false },
-            onSave = { key ->
-                if (controller.saveApiKey(key)) showKeyDialog = false
+            onSave = { key, preferredName ->
+                if (controller.saveSettings(key, preferredName)) showKeyDialog = false
             },
             onDelete = if (state.hasApiKey) {
                 {
@@ -310,11 +311,13 @@ private fun DeepSeekMessageBubble(message: DeepSeekMessage, onLink: (String) -> 
 @Composable
 private fun DeepSeekApiKeyDialog(
     hasExistingKey: Boolean,
+    preferredName: String,
     onDismiss: () -> Unit,
-    onSave: (String) -> Unit,
+    onSave: (String, String) -> Unit,
     onDelete: (() -> Unit)?,
 ) {
     var key by remember { mutableStateOf("") }
+    var name by remember(preferredName) { mutableStateOf(preferredName) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("DeepSeek API 密钥") },
@@ -333,9 +336,22 @@ private fun DeepSeekApiKeyDialog(
                     visualTransformation = PasswordVisualTransformation(),
                     modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
                 )
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it.take(24) },
+                    label = { Text("称呼（可选）") },
+                    supportingText = { Text("通常直接回答；确实需要称呼时使用这里的名字") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                )
             }
         },
-        confirmButton = { Button(onClick = { onSave(key) }, enabled = key.isNotBlank()) { Text("安全保存") } },
+        confirmButton = {
+            Button(
+                onClick = { onSave(key, name) },
+                enabled = hasExistingKey || key.isNotBlank(),
+            ) { Text("安全保存") }
+        },
         dismissButton = {
             Row {
                 if (onDelete != null) {
