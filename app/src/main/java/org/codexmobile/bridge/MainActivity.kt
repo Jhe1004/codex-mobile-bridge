@@ -20,6 +20,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -38,6 +39,10 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.text.contextmenu.builder.item
+import androidx.compose.foundation.text.contextmenu.data.TextContextMenuKeys
+import androidx.compose.foundation.text.contextmenu.modifier.appendTextContextMenuComponents
+import androidx.compose.foundation.text.contextmenu.modifier.filterTextContextMenuComponents
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -60,9 +65,12 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -85,8 +93,10 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalTextToolbar
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -361,11 +371,27 @@ private fun SessionHeartbeatIndicator(state: BridgeUiState, onClick: () -> Unit)
 fun CodexMobileApp(onBatterySettings: () -> Unit) {
     val state by BridgeClient.state.collectAsState()
     val homeListState = rememberLazyListState()
+    val context = LocalContext.current
+    val deepSeekController = remember { DeepSeekChatController(context) }
+    var deepSeekOpen by remember { mutableStateOf(false) }
+    var deepSeekSelectedQuote by remember { mutableStateOf<String?>(null) }
+    DisposableEffect(deepSeekController) {
+        onDispose(deepSeekController::close)
+    }
     MaterialTheme(colorScheme = ChatGptColorScheme) {
         Surface(modifier = Modifier.fillMaxSize(), color = Paper) {
             when {
+                deepSeekOpen -> DeepSeekChatScreen(
+                    controller = deepSeekController,
+                    selectedQuote = deepSeekSelectedQuote,
+                    onQuoteConsumed = { deepSeekSelectedQuote = null },
+                    onBack = { deepSeekOpen = false },
+                )
                 state.filePreview != null -> FilePreviewScreen(state.filePreview!!)
-                state.selectedThread != null -> ChatScreen(state)
+                state.selectedThread != null -> ChatScreen(state) { selectedText ->
+                    deepSeekSelectedQuote = selectedText
+                    deepSeekOpen = true
+                }
                 else -> ProjectTreeScreen(state, onBatterySettings, homeListState)
             }
             state.fileTransfer?.let { transfer ->
@@ -588,7 +614,7 @@ private fun ThreadActivityIndicator(activity: ThreadActivity) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ChatScreen(state: BridgeUiState) {
+private fun ChatScreen(state: BridgeUiState, onOpenDeepSeek: (String?) -> Unit) {
     val threadId = state.selectedThread?.id
     val context = LocalContext.current
     val draftStore = remember { ConversationDraftStore.forContext(context) }
@@ -642,6 +668,13 @@ private fun ChatScreen(state: BridgeUiState) {
                 title = { Column { Text(state.selectedThread?.title ?: "任务", maxLines = 1, fontWeight = FontWeight.SemiBold, color = Ink); Text(threadStatus, style = MaterialTheme.typography.labelSmall, color = if (sessionConnectionHealth(state.relayConnected, state.macConnected, state.appServerReady, threadId, state.preparingThreadId) == SessionConnectionHealth.READY) Accent else Muted) } },
                 navigationIcon = { IconButton(onClick = BridgeClient::backToThreads) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") } },
                 actions = {
+                    TextButton(
+                        onClick = { onOpenDeepSeek(null) },
+                        contentPadding = PaddingValues(horizontal = 8.dp),
+                        modifier = Modifier.semantics { contentDescription = "打开 DeepSeek 手机直连对话" },
+                    ) {
+                        Text("DeepSeek", style = MaterialTheme.typography.labelSmall, color = Accent)
+                    }
                     SessionHeartbeatIndicator(state, onClick = BridgeClient::refreshSelectedSession)
                     if (state.activeTurnId != null) IconButton(onClick = BridgeClient::stopTurn) { Icon(Icons.Default.Close, "停止") }
                 },
@@ -745,8 +778,8 @@ private fun ChatScreen(state: BridgeUiState) {
                 .alpha(if (initialBottomShown || !hasConversationContent) 1f else 0f),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            items(state.messages, key = { it.id }) { MessageBubble(it) }
-            if (state.streamingText.isNotBlank()) item { MessageBubble(ChatMessage("streaming", "assistant", state.streamingText)) }
+            items(state.messages, key = { it.id }) { MessageBubble(it, onOpenDeepSeek) }
+            if (state.streamingText.isNotBlank()) item { MessageBubble(ChatMessage("streaming", "assistant", state.streamingText), onOpenDeepSeek) }
             state.error?.let { item { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(12.dp)) } }
             item { Spacer(Modifier.height(8.dp)) }
         }
@@ -785,10 +818,16 @@ private fun ComposerAttachmentChip(attachment: ComposerAttachment, onRemove: () 
 }
 
 @Composable
-private fun MessageBubble(message: ChatMessage) {
+private fun MessageBubble(message: ChatMessage, onOpenDeepSeek: (String?) -> Unit) {
     val mine = message.role == "user"
     val tool = message.role == "tool"
     val uriHandler = LocalUriHandler.current
+    val view = LocalView.current
+    val deepSeekToolbar = remember(view) { DeepSeekTextToolbar(view, onOpenDeepSeek) }
+    deepSeekToolbar.onAskSelectedText = onOpenDeepSeek
+    DisposableEffect(deepSeekToolbar) {
+        onDispose(deepSeekToolbar::hide)
+    }
     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start) {
         Box(
             modifier = Modifier
@@ -801,17 +840,32 @@ private fun MessageBubble(message: ChatMessage) {
         ) {
             Column {
                 if (tool) Text("工具 · ${message.detail}", style = MaterialTheme.typography.labelSmall, color = Muted)
-                SelectionContainer {
-                    MarkdownText(
-                        text = message.text,
-                        color = Ink,
-                        codeSurface = Color(0xFF1A1A1A),
-                        quoteSurface = Color(0xFF121212),
-                        onLink = { target ->
-                            if (target.startsWith("https://") || target.startsWith("http://")) uriHandler.openUri(target)
-                            else BridgeClient.downloadFile(target)
-                        },
-                    )
+                CompositionLocalProvider(LocalTextToolbar provides deepSeekToolbar) {
+                    SelectionContainer(
+                        modifier = Modifier
+                            .appendTextContextMenuComponents {
+                                item(DeepSeekContextMenuKey, "问 DeepSeek") {
+                                    askDeepSeekFromFocusedSelection(view, onOpenDeepSeek)
+                                    close()
+                                }
+                            }
+                            .filterTextContextMenuComponents { component ->
+                                component.key === DeepSeekContextMenuKey ||
+                                    component.key === TextContextMenuKeys.CopyKey ||
+                                    component.key === TextContextMenuKeys.SelectAllKey
+                            },
+                    ) {
+                        MarkdownText(
+                            text = message.text,
+                            color = Ink,
+                            codeSurface = Color(0xFF1A1A1A),
+                            quoteSurface = Color(0xFF121212),
+                            onLink = { target ->
+                                if (target.startsWith("https://") || target.startsWith("http://")) uriHandler.openUri(target)
+                                else BridgeClient.downloadFile(target)
+                            },
+                        )
+                    }
                 }
                 if (!tool && message.detail.isNotBlank()) Text(message.detail, style = MaterialTheme.typography.labelSmall, color = Muted, modifier = Modifier.padding(top = 6.dp))
             }

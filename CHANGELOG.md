@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.27.0 - 2026-10-20
+
+- 会话页新增 DeepSeek 手机直连入口，使用官方 `deepseek-flash` 模型别名，当前对应 DeepSeek V4.1-Flash-1017；请求由 Android 手机直接发出，不依赖 Mac 或 Codex 连接。
+- 长按选中 Codex 会话文字后，系统选择菜单新增“问 DeepSeek”；选中内容会作为引用进入 DeepSeek 输入框，等待用户补充问题后发送。
+- DeepSeek 对话记录与草稿仅保存在 Android 应用私有存储中；API 密钥由 Android Keystore 生成的 AES-GCM 密钥加密，不写入源码、APK 或 Git 历史。
+- DeepSeek 页支持流式回复、Markdown、停止生成、清空对话、替换或删除 API 密钥。
+
 ## 0.26.2 - 2026-10-20
 
 - 从主页进入会话后再返回，项目与会话列表会恢复离开前的条目和精确滚动偏移，不再跳回顶部。
