@@ -91,7 +91,11 @@ internal fun DeepSeekChatScreen(
                     Column {
                         Text(DEEPSEEK_MODEL_LABEL, maxLines = 1, fontWeight = FontWeight.SemiBold)
                         Text(
-                            if (state.hasApiKey) "手机直连 · 不依赖 Mac" else "需要设置 API 密钥",
+                            when {
+                                !state.hasApiKey -> "需要设置 API 密钥"
+                                state.attachedContext != null -> "已附带 Codex 上下文 · 手机直连"
+                                else -> "手机直连 · 不依赖 Mac"
+                            },
                             style = MaterialTheme.typography.labelSmall,
                             color = if (state.hasApiKey) Color(0xFF10A37F) else Color(0xFFA3A3A3),
                         )
@@ -118,13 +122,43 @@ internal fun DeepSeekChatScreen(
             )
         },
         bottomBar = {
-            Row(
+            Column(
                 Modifier
                     .fillMaxWidth()
                     .background(Color.Black)
                     .padding(horizontal = 12.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.Bottom,
             ) {
+                state.attachedContext?.let { context ->
+                    Surface(
+                        color = Color(0xFF151515),
+                        shape = RoundedCornerShape(16.dp),
+                        border = BorderStroke(1.dp, Color(0xFF2A2A2A)),
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 7.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(start = 12.dp, top = 5.dp, bottom = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    "已附带 ${context.messageCount} 条 Codex 上下文",
+                                    maxLines = 1,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = Color(0xFFF2F2F2),
+                                )
+                                Text(
+                                    "${context.projectName} · ${context.threadTitle}（后台发送，不占输入框）",
+                                    maxLines = 1,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Color(0xFF8E8E8E),
+                                )
+                            }
+                            IconButton(onClick = controller::detachContext, modifier = Modifier.size(38.dp)) {
+                                Icon(Icons.Default.Close, "不再附带 Codex 上下文", modifier = Modifier.size(18.dp))
+                            }
+                        }
+                    }
+                }
                 Surface(
                     color = Color.Black,
                     shape = RoundedCornerShape(28.dp),

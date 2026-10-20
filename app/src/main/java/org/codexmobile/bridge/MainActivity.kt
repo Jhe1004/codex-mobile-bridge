@@ -388,8 +388,9 @@ fun CodexMobileApp(onBatterySettings: () -> Unit) {
                     onBack = { deepSeekOpen = false },
                 )
                 state.filePreview != null -> FilePreviewScreen(state.filePreview!!)
-                state.selectedThread != null -> ChatScreen(state) { selectedText ->
-                    deepSeekSelectedQuote = selectedText
+                state.selectedThread != null -> ChatScreen(state) { launch ->
+                    deepSeekController.attachContext(launch.context)
+                    deepSeekSelectedQuote = launch.selectedQuote
                     deepSeekOpen = true
                 }
                 else -> ProjectTreeScreen(state, onBatterySettings, homeListState)
@@ -614,7 +615,7 @@ private fun ThreadActivityIndicator(activity: ThreadActivity) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ChatScreen(state: BridgeUiState, onOpenDeepSeek: (String?) -> Unit) {
+private fun ChatScreen(state: BridgeUiState, onOpenDeepSeek: (DeepSeekLaunchPayload) -> Unit) {
     val threadId = state.selectedThread?.id
     val context = LocalContext.current
     val draftStore = remember { ConversationDraftStore.forContext(context) }
@@ -650,6 +651,29 @@ private fun ChatScreen(state: BridgeUiState, onOpenDeepSeek: (String?) -> Unit) 
     val hasConversationContent = state.messages.isNotEmpty() || hasStreamingMessage || hasErrorMessage
     val lastItemIndex = state.messages.size + (if (hasStreamingMessage) 1 else 0) + (if (hasErrorMessage) 1 else 0)
     var initialBottomShown by remember(threadId) { mutableStateOf(false) }
+    fun launchDeepSeek(selectedQuote: String?, selectedMessageId: String?) {
+        val thread = state.selectedThread ?: return
+        val projectName = state.projects.firstOrNull { it.id == thread.projectId }?.name
+            ?: state.selectedProject?.name
+            ?: "未命名项目"
+        val contextMessages = if (state.streamingText.isNotBlank()) {
+            state.messages + ChatMessage("streaming", "assistant", state.streamingText)
+        } else {
+            state.messages
+        }
+        onOpenDeepSeek(
+            DeepSeekLaunchPayload(
+                selectedQuote = selectedQuote,
+                context = buildDeepSeekConversationContext(
+                    threadId = thread.id,
+                    projectName = projectName,
+                    threadTitle = thread.title,
+                    messages = contextMessages,
+                    selectedMessageId = selectedMessageId,
+                ),
+            ),
+        )
+    }
     LaunchedEffect(threadId, lastItemIndex, state.streamingText) {
         if (hasConversationContent) {
             // Instant positioning avoids the visible top-to-bottom animation that caused dizziness.
@@ -669,7 +693,7 @@ private fun ChatScreen(state: BridgeUiState, onOpenDeepSeek: (String?) -> Unit) 
                 navigationIcon = { IconButton(onClick = BridgeClient::backToThreads) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") } },
                 actions = {
                     TextButton(
-                        onClick = { onOpenDeepSeek(null) },
+                        onClick = { launchDeepSeek(null, null) },
                         contentPadding = PaddingValues(horizontal = 8.dp),
                         modifier = Modifier.semantics { contentDescription = "打开 DeepSeek 手机直连对话" },
                     ) {
@@ -778,8 +802,16 @@ private fun ChatScreen(state: BridgeUiState, onOpenDeepSeek: (String?) -> Unit) 
                 .alpha(if (initialBottomShown || !hasConversationContent) 1f else 0f),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            items(state.messages, key = { it.id }) { MessageBubble(it, onOpenDeepSeek) }
-            if (state.streamingText.isNotBlank()) item { MessageBubble(ChatMessage("streaming", "assistant", state.streamingText), onOpenDeepSeek) }
+            items(state.messages, key = { it.id }) { message ->
+                MessageBubble(message) { selectedText -> launchDeepSeek(selectedText, message.id) }
+            }
+            if (state.streamingText.isNotBlank()) {
+                item {
+                    MessageBubble(ChatMessage("streaming", "assistant", state.streamingText)) { selectedText ->
+                        launchDeepSeek(selectedText, "streaming")
+                    }
+                }
+            }
             state.error?.let { item { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(12.dp)) } }
             item { Spacer(Modifier.height(8.dp)) }
         }

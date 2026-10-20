@@ -21,13 +21,23 @@ internal data class DeepSeekStreamDelta(
 )
 
 internal object DeepSeekProtocol {
-    fun requestBody(messages: List<DeepSeekMessage>): String {
+    fun requestBody(
+        messages: List<DeepSeekMessage>,
+        context: DeepSeekConversationContext? = null,
+    ): String {
         val apiMessages = JSONArray().apply {
             put(
                 JSONObject()
                     .put("role", "system")
                     .put("content", "请用简体中文清楚、直接地回答用户。用 Markdown 组织需要分层的内容。"),
             )
+            context?.takeIf { it.messages.isNotEmpty() }?.let { hiddenContext ->
+                put(
+                    JSONObject()
+                        .put("role", "system")
+                        .put("content", hiddenContext.asHiddenSystemMessage()),
+                )
+            }
             messages
                 .filter { it.role == "user" || it.role == "assistant" }
                 .takeLast(MAX_CONTEXT_MESSAGES)

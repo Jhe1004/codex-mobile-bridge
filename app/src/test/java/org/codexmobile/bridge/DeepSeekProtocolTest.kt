@@ -25,6 +25,28 @@ class DeepSeekProtocolTest {
     }
 
     @Test
+    fun sendsCodexContextAsHiddenSystemMessageInsteadOfVisibleChatHistory() {
+        val context = DeepSeekConversationContext(
+            threadId = "thread-1",
+            projectName = "测试项目",
+            threadTitle = "测试会话",
+            messages = listOf(
+                DeepSeekContextMessage("source", "assistant", "隐藏的项目背景", selectedSource = true),
+            ),
+        )
+        val body = DeepSeekProtocol.requestBody(
+            messages = listOf(DeepSeekMessage("1", "user", "为什么？")),
+            context = context,
+        )
+        val messages = JSONObject(body).getJSONArray("messages")
+
+        assertEquals("system", messages.getJSONObject(1).getString("role"))
+        assertTrue(messages.getJSONObject(1).getString("content").contains("隐藏的项目背景"))
+        assertEquals("为什么？", messages.getJSONObject(2).getString("content"))
+        assertEquals(3, messages.length())
+    }
+
+    @Test
     fun parsesReasoningContentAndCompletion() {
         val reasoning = DeepSeekProtocol.parseStreamData(
             """{"choices":[{"delta":{"reasoning_content":"thinking"},"finish_reason":null}]}""",

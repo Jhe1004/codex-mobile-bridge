@@ -31,6 +31,10 @@
   the HTTPS Authorization header to `api.deepseek.com`. Never place a DeepSeek
   key in source, Gradle properties, pairing JSON, build artifacts, logs, or test
   fixtures.
+- When DeepSeek context is enabled, Android sends a bounded snapshot of the
+  current Codex chat directly to DeepSeek. The UI always shows a context chip,
+  allows removal before sending, omits local paths as metadata, and limits the
+  snapshot to 30 messages and 28,000 characters.
 - Rotate both tokens after a lost phone, a shared log, or a suspected leak.
 
 ## Reporting

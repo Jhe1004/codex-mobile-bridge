@@ -6,6 +6,7 @@ import android.security.keystore.KeyProperties
 import android.util.Base64
 import java.io.IOException
 import java.security.KeyStore
+import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
@@ -35,6 +36,7 @@ internal data class DeepSeekUiState(
     val sending: Boolean = false,
     val error: String? = null,
     val hasApiKey: Boolean = false,
+    val attachedContext: DeepSeekConversationContext? = null,
 )
 
 internal class DeepSeekChatController(context: Context) {
@@ -48,10 +50,11 @@ internal class DeepSeekChatController(context: Context) {
         .build()
     private val requestGeneration = AtomicLong(0L)
     private var activeCall: Call? = null
+    private var currentSessionKey = STANDALONE_SESSION
     private val mutableState = MutableStateFlow(
         DeepSeekUiState(
-            messages = chatStore.load(),
-            draft = chatStore.loadDraft(),
+            messages = chatStore.load(currentSessionKey),
+            draft = chatStore.loadDraft(currentSessionKey),
             hasApiKey = credentialStore.load().isNotBlank(),
         ),
     )
@@ -71,15 +74,58 @@ internal class DeepSeekChatController(context: Context) {
         mutableState.update { it.copy(hasApiKey = false, error = null) }
     }
 
+    fun attachContext(context: DeepSeekConversationContext) {
+        cancel()
+        val nextSessionKey = context.threadId.ifBlank { STANDALONE_SESSION }
+        if (nextSessionKey == currentSessionKey) {
+            mutableState.update { it.copy(attachedContext = context, error = null) }
+            return
+        }
+        val previousState = mutableState.value
+        var nextMessages = chatStore.load(nextSessionKey)
+        var nextDraft = chatStore.loadDraft(nextSessionKey)
+        if (
+            currentSessionKey == STANDALONE_SESSION &&
+            nextMessages.isEmpty() &&
+            nextDraft.isBlank() &&
+            (previousState.messages.isNotEmpty() || previousState.draft.isNotBlank())
+        ) {
+            // 0.27.0 had one global DeepSeek chat. Preserve it by moving it into the
+            // first Codex chat opened after this per-chat storage upgrade.
+            nextMessages = previousState.messages
+            nextDraft = previousState.draft
+            chatStore.save(nextSessionKey, nextMessages)
+            chatStore.saveDraft(nextSessionKey, nextDraft)
+            chatStore.clear(STANDALONE_SESSION)
+            chatStore.saveDraft(STANDALONE_SESSION, "")
+        }
+        currentSessionKey = nextSessionKey
+        mutableState.update {
+            it.copy(
+                messages = nextMessages,
+                draft = nextDraft,
+                streamingText = "",
+                thinking = false,
+                sending = false,
+                error = null,
+                attachedContext = context,
+            )
+        }
+    }
+
+    fun detachContext() {
+        mutableState.update { it.copy(attachedContext = null) }
+    }
+
     fun clearConversation() {
         cancel()
-        chatStore.clear()
-        chatStore.saveDraft("")
+        chatStore.clear(currentSessionKey)
+        chatStore.saveDraft(currentSessionKey, "")
         mutableState.update { it.copy(messages = emptyList(), draft = "", streamingText = "", error = null) }
     }
 
     fun updateDraft(text: String) {
-        chatStore.saveDraft(text)
+        chatStore.saveDraft(currentSessionKey, text)
         mutableState.update { it.copy(draft = text) }
     }
 
@@ -94,8 +140,8 @@ internal class DeepSeekChatController(context: Context) {
 
         val userMessage = DeepSeekMessage(UUID.randomUUID().toString(), "user", prompt)
         val requestMessages = mutableState.value.messages + userMessage
-        chatStore.save(requestMessages)
-        chatStore.saveDraft("")
+        chatStore.save(currentSessionKey, requestMessages)
+        chatStore.saveDraft(currentSessionKey, "")
         mutableState.update {
             it.copy(
                 messages = requestMessages,
@@ -114,7 +160,7 @@ internal class DeepSeekChatController(context: Context) {
             .header("Authorization", "Bearer $apiKey")
             .header("Accept", "text/event-stream")
             .post(
-                DeepSeekProtocol.requestBody(requestMessages)
+                DeepSeekProtocol.requestBody(requestMessages, mutableState.value.attachedContext)
                     .toRequestBody("application/json; charset=utf-8".toMediaType()),
             )
             .build()
@@ -178,7 +224,7 @@ internal class DeepSeekChatController(context: Context) {
         } else {
             current.messages
         }
-        chatStore.save(messages)
+        chatStore.save(currentSessionKey, messages)
         mutableState.value = current.copy(
             messages = messages,
             streamingText = "",
@@ -202,7 +248,7 @@ internal class DeepSeekChatController(context: Context) {
             return
         }
         val messages = current.messages + DeepSeekMessage(UUID.randomUUID().toString(), "assistant", answer)
-        chatStore.save(messages)
+        chatStore.save(currentSessionKey, messages)
         activeCall = null
         mutableState.value = current.copy(
             messages = messages,
@@ -223,6 +269,10 @@ internal class DeepSeekChatController(context: Context) {
                 error = message,
             )
         }
+    }
+
+    companion object {
+        private const val STANDALONE_SESSION = "standalone"
     }
 }
 
@@ -289,8 +339,8 @@ private class DeepSeekCredentialStore(context: Context) {
 private class DeepSeekChatStore(context: Context) {
     private val preferences = context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
 
-    fun load(): List<DeepSeekMessage> {
-        val raw = preferences.getString(HISTORY_KEY, null) ?: return emptyList()
+    fun load(sessionKey: String): List<DeepSeekMessage> {
+        val raw = preferences.getString(historyKey(sessionKey), null) ?: return emptyList()
         return runCatching {
             val array = JSONArray(raw)
             buildList {
@@ -313,7 +363,7 @@ private class DeepSeekChatStore(context: Context) {
         }.getOrElse { emptyList() }
     }
 
-    fun save(messages: List<DeepSeekMessage>) {
+    fun save(sessionKey: String, messages: List<DeepSeekMessage>) {
         val kept = messages.takeLast(MAX_SAVED_MESSAGES)
         val array = JSONArray().apply {
             kept.forEach { message ->
@@ -326,19 +376,37 @@ private class DeepSeekChatStore(context: Context) {
                 )
             }
         }
-        preferences.edit().putString(HISTORY_KEY, array.toString()).apply()
+        preferences.edit().putString(historyKey(sessionKey), array.toString()).apply()
     }
 
-    fun clear() {
-        preferences.edit().remove(HISTORY_KEY).apply()
+    fun clear(sessionKey: String) {
+        preferences.edit().remove(historyKey(sessionKey)).apply()
     }
 
-    fun loadDraft(): String = preferences.getString(DRAFT_KEY, "").orEmpty()
+    fun loadDraft(sessionKey: String): String = preferences.getString(draftKey(sessionKey), "").orEmpty()
 
-    fun saveDraft(text: String) {
+    fun saveDraft(sessionKey: String, text: String) {
+        val key = draftKey(sessionKey)
         preferences.edit().apply {
-            if (text.isEmpty()) remove(DRAFT_KEY) else putString(DRAFT_KEY, text)
+            if (text.isEmpty()) remove(key) else putString(key, text)
         }.apply()
+    }
+
+    private fun historyKey(sessionKey: String): String = if (sessionKey == STANDALONE_SESSION) {
+        HISTORY_KEY
+    } else {
+        "${HISTORY_KEY}_${sessionHash(sessionKey)}"
+    }
+
+    private fun draftKey(sessionKey: String): String = if (sessionKey == STANDALONE_SESSION) {
+        DRAFT_KEY
+    } else {
+        "${DRAFT_KEY}_${sessionHash(sessionKey)}"
+    }
+
+    private fun sessionHash(sessionKey: String): String {
+        val digest = MessageDigest.getInstance("SHA-256").digest(sessionKey.toByteArray(Charsets.UTF_8))
+        return digest.take(12).joinToString("") { "%02x".format(it) }
     }
 
     companion object {
@@ -346,5 +414,6 @@ private class DeepSeekChatStore(context: Context) {
         private const val HISTORY_KEY = "messages"
         private const val DRAFT_KEY = "draft"
         private const val MAX_SAVED_MESSAGES = 80
+        private const val STANDALONE_SESSION = "standalone"
     }
 }
