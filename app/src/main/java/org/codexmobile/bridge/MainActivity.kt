@@ -601,6 +601,7 @@ private fun ChatScreen(state: BridgeUiState) {
     val threadStatus = when {
         state.offlineMode -> "离线阅读 · 手机缓存"
         !state.relayConnected || !state.macConnected -> state.connection
+        state.activeTurnId != null || state.selectedThread?.activity == ThreadActivity.RUNNING -> "回复生成中…"
         state.conversationContentState == ConversationContentState.LOADING_CACHE -> "正在读取本地记录…"
         state.conversationContentState == ConversationContentState.SYNCING -> "正在检查新内容…"
         state.conversationContentState == ConversationContentState.CACHED_CURRENT -> "正在核对本地记录…"

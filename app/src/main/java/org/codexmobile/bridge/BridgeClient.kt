@@ -365,7 +365,7 @@ object BridgeClient {
                 // Render the disk cache immediately, then verify it against
                 // Codex. A restored or compacted chat may have continued in a
                 // replacement rollout even when the original file is unchanged.
-                refreshSelectedThread(showSyncing = false)
+                refreshSelectedThread(showSyncing = false, reportErrors = true)
             } else {
                 _state.update { current ->
                     if (current.selectedThread?.id != selected.id) current else current.copy(
@@ -433,7 +433,10 @@ object BridgeClient {
         }
     }
 
-    fun refreshSelectedThread(showSyncing: Boolean = false) {
+    fun refreshSelectedThread(
+        showSyncing: Boolean = false,
+        reportErrors: Boolean = showSyncing,
+    ) {
         if (_state.value.offlineMode) return
         val threadId = _state.value.selectedThread?.id ?: return
         if (!latestSyncInFlight.add(threadId)) return
@@ -448,7 +451,7 @@ object BridgeClient {
             JSONObject().put("threadId", threadId).put("limit", 120).put("knownRevision", knownRevision),
             onError = { message ->
                 latestSyncInFlight.remove(threadId)
-                if (_state.value.selectedThread?.id == threadId) {
+                if (reportErrors && _state.value.selectedThread?.id == threadId) {
                     _state.value = _state.value.copy(
                         conversationContentState = if (_state.value.loadedContentRevision.isNotBlank()) {
                             ConversationContentState.CACHED_CURRENT
@@ -457,6 +460,8 @@ object BridgeClient {
                         },
                         error = message,
                     )
+                } else {
+                    Log.w("CodexMobile", "Silent conversation refresh failed threadId=$threadId error=$message")
                 }
             },
         ) { result ->
@@ -1442,7 +1447,9 @@ object BridgeClient {
             refreshedSelectedThread.contentRevision != previous.loadedContentRevision &&
             previous.activeTurnId == null
         ) {
-            refreshSelectedThread(showSyncing = true)
+            // The five-second background reconciliation must not temporarily
+            // replace "会话已就绪" with a syncing state or disable the composer.
+            refreshSelectedThread(showSyncing = false, reportErrors = false)
         }
     }
 
