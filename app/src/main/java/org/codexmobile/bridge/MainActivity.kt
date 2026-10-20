@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -359,12 +360,13 @@ private fun SessionHeartbeatIndicator(state: BridgeUiState, onClick: () -> Unit)
 @Composable
 fun CodexMobileApp(onBatterySettings: () -> Unit) {
     val state by BridgeClient.state.collectAsState()
+    val homeListState = rememberLazyListState()
     MaterialTheme(colorScheme = ChatGptColorScheme) {
         Surface(modifier = Modifier.fillMaxSize(), color = Paper) {
             when {
                 state.filePreview != null -> FilePreviewScreen(state.filePreview!!)
                 state.selectedThread != null -> ChatScreen(state)
-                else -> ProjectTreeScreen(state, onBatterySettings)
+                else -> ProjectTreeScreen(state, onBatterySettings, homeListState)
             }
             state.fileTransfer?.let { transfer ->
                 val progress = if (transfer.totalBytes > 0) transfer.receivedBytes.toFloat() / transfer.totalBytes else 0f
@@ -402,7 +404,11 @@ fun CodexMobileApp(onBatterySettings: () -> Unit) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ProjectTreeScreen(state: BridgeUiState, onBatterySettings: () -> Unit) {
+private fun ProjectTreeScreen(
+    state: BridgeUiState,
+    onBatterySettings: () -> Unit,
+    listState: LazyListState,
+) {
     Scaffold(
         containerColor = Paper,
         topBar = {
@@ -417,7 +423,10 @@ private fun ProjectTreeScreen(state: BridgeUiState, onBatterySettings: () -> Uni
             }
         },
     ) { padding ->
-        LazyColumn(modifier = Modifier.padding(padding).fillMaxSize()) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.padding(padding).fillMaxSize(),
+        ) {
             item {
                 if (state.offlineMode) {
                     Card(
