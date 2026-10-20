@@ -19,16 +19,30 @@ internal data class CachedConversation(
 internal fun cacheMatchesThread(cache: CachedConversation?, thread: ThreadSummary): Boolean =
     cache != null && thread.contentRevision.startsWith("file:") && cache.contentRevision == thread.contentRevision
 
-internal class ConversationCacheStore(private val root: File) {
+internal fun mergeConversationTail(
+    existing: List<ChatMessage>,
+    tail: List<ChatMessage>,
+    limit: Int = ConversationCacheStore.MAX_MESSAGES,
+): List<ChatMessage> {
+    if (tail.isEmpty()) return existing.takeLast(limit)
+    val tailIds = tail.mapTo(mutableSetOf(), ChatMessage::id)
+    return (existing.filterNot { it.id in tailIds } + tail).takeLast(limit)
+}
+
+internal class ConversationCacheStore(
+    private val root: File,
+    private val legacyRoot: File? = null,
+) {
     @Synchronized
-    fun load(threadId: String): CachedConversation? {
-        val file = cacheFile(threadId)
+    fun load(thread: ThreadSummary): CachedConversation? {
+        val file = cacheFile(thread.projectId, thread.id)
+        migrateLegacy(thread.id, file)
         if (!file.isFile || file.length() !in 1..MAX_ENTRY_BYTES) return null
         return runCatching {
             DataInputStream(BufferedInputStream(file.inputStream())).use { input ->
                 if (input.readInt() != MAGIC || input.readInt() != FORMAT_VERSION) error("unsupported cache")
                 val storedThreadId = input.readBoundedString()
-                if (storedThreadId != threadId) error("thread mismatch")
+                if (storedThreadId != thread.id) error("thread mismatch")
                 val contentRevision = input.readBoundedString()
                 val savedAtMs = input.readLong()
                 val count = input.readInt()
@@ -54,10 +68,10 @@ internal class ConversationCacheStore(private val root: File) {
     @Synchronized
     fun save(thread: ThreadSummary, messages: List<ChatMessage>) {
         if (thread.id.isBlank() || thread.contentRevision.isBlank()) return
-        root.mkdirs()
+        val directory = ProjectCacheLayout.conversationDirectory(root, thread.projectId).apply { mkdirs() }
         val retained = trimToLimit(messages.takeLast(MAX_MESSAGES))
-        val destination = cacheFile(thread.id)
-        val temporary = File(root, "${destination.name}.partial")
+        val destination = cacheFile(thread.projectId, thread.id)
+        val temporary = File(directory, "${destination.name}.partial")
         runCatching {
             DataOutputStream(BufferedOutputStream(temporary.outputStream())).use { output ->
                 output.writeInt(MAGIC)
@@ -82,6 +96,12 @@ internal class ConversationCacheStore(private val root: File) {
         }.onFailure { temporary.delete() }
     }
 
+    @Synchronized
+    fun mergeTail(thread: ThreadSummary, messages: List<ChatMessage>) {
+        val existing = load(thread)?.messages.orEmpty()
+        save(thread, mergeConversationTail(existing, messages))
+    }
+
     private fun trimToLimit(messages: List<ChatMessage>): List<ChatMessage> {
         var bytes = 128L
         val keptNewestFirst = mutableListOf<ChatMessage>()
@@ -97,19 +117,30 @@ internal class ConversationCacheStore(private val root: File) {
 
     private fun prune() {
         var total = 0L
-        root.listFiles()
-            ?.filter { it.isFile && it.extension == "bin" }
-            ?.sortedByDescending { it.lastModified() }
-            ?.forEachIndexed { index, file ->
+        root.walkTopDown()
+            .filter { it.isFile && it.extension == "bin" }
+            .sortedByDescending { it.lastModified() }
+            .forEachIndexed { index, file ->
                 total += file.length()
                 if (index >= MAX_ENTRIES || total > MAX_TOTAL_BYTES) file.delete()
             }
     }
 
-    private fun cacheFile(threadId: String): File {
+    private fun cacheFile(projectId: String, threadId: String): File =
+        ProjectCacheLayout.conversationFile(root, projectId, threadId)
+
+    private fun migrateLegacy(threadId: String, destination: File) {
+        if (destination.exists()) return
+        val legacyDirectory = legacyRoot ?: return
         val digest = MessageDigest.getInstance("SHA-256").digest(threadId.toByteArray(Charsets.UTF_8))
         val name = digest.joinToString("") { "%02x".format(it.toInt() and 0xff) }
-        return File(root, "$name.bin")
+        val legacy = File(legacyDirectory, "$name.bin")
+        if (!legacy.isFile) return
+        destination.parentFile?.mkdirs()
+        if (!legacy.renameTo(destination)) {
+            legacy.copyTo(destination, overwrite = false)
+            legacy.delete()
+        }
     }
 
     private fun DataOutputStream.writeBoundedString(value: String) {
@@ -130,13 +161,23 @@ internal class ConversationCacheStore(private val root: File) {
     companion object {
         private const val MAGIC = 0x434D4243
         private const val FORMAT_VERSION = 1
-        private const val MAX_MESSAGES = 120
+        internal const val MAX_MESSAGES = 2_000
         private const val MAX_STRING_BYTES = 4 * 1024 * 1024
-        private const val MAX_ENTRY_BYTES = 12L * 1024L * 1024L
-        private const val MAX_TOTAL_BYTES = 64L * 1024L * 1024L
-        private const val MAX_ENTRIES = 40
+        private const val MAX_ENTRY_BYTES = 256L * 1024L * 1024L
+        private const val MAX_TOTAL_BYTES = 2L * 1024L * 1024L * 1024L
+        private const val MAX_ENTRIES = 400
 
         fun forContext(context: Context): ConversationCacheStore =
-            ConversationCacheStore(File(context.filesDir, "conversation_cache_v1"))
+            ConversationCacheStore(
+                root = ProjectCacheLayout.root(context),
+                legacyRoot = File(context.filesDir, "conversation_cache_v1"),
+            )
+
+        fun deleteLegacyThreads(context: Context, threadIds: Set<String>) {
+            val root = File(context.filesDir, "conversation_cache_v1")
+            threadIds.forEach { threadId ->
+                File(root, "${sha256Hex(threadId.toByteArray(Charsets.UTF_8))}.bin").delete()
+            }
+        }
     }
 }

@@ -65,8 +65,8 @@ internal class CatalogCacheStore(private val file: File) {
     }
 
     @Synchronized
-    fun save(projects: List<ProjectSummary>, threads: List<ThreadSummary>) {
-        if (projects.isEmpty() && threads.isEmpty()) return
+    fun save(projects: List<ProjectSummary>, threads: List<ThreadSummary>, allowEmpty: Boolean = false) {
+        if (!allowEmpty && projects.isEmpty() && threads.isEmpty()) return
         file.parentFile?.mkdirs()
         val temporary = File(file.parentFile, "${file.name}.partial")
         runCatching {

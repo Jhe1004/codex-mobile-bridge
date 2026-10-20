@@ -45,13 +45,19 @@ try {
   assert.equal(response.ok, true);
   assert.ok(response.seq > 0);
 
+  mac.send(JSON.stringify({ type: "response.chunk", requestId: "r2", index: 0, total: 1, data: "e30=" }));
+  const responseChunk = await next(android);
+  assert.equal(responseChunk.type, "response.chunk");
+  assert.equal(responseChunk.requestId, "r2");
+  assert.equal(responseChunk.data, "e30=");
+
   mac.send(JSON.stringify({ type: "event", event: "turn.completed", data: { turnId: "t1" } }));
   const event = await next(android);
   assert.equal(event.event, "turn.completed");
 
   mac.close();
   android.close();
-  console.log(JSON.stringify({ ok: true, checks: ["authentication", "android_to_mac", "mac_to_android", "event_stream"] }));
+  console.log(JSON.stringify({ ok: true, checks: ["authentication", "android_to_mac", "mac_to_android", "chunked_response", "event_stream"] }));
 } finally {
   child.kill("SIGTERM");
 }

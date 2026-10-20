@@ -26,4 +26,18 @@ assert.equal(calls[0].method, "thread/items/list");
 assert.equal(calls[0].params.sortDirection, "desc");
 assert.deepEqual(result.messages.map((message) => message.id), ["u1", "a2"]);
 assert.equal(result.messages[0].clientId, "client-u1");
+
+let page = 0;
+const fullHistory = await listLatestVisibleMessages(async () => {
+  const currentPage = page++;
+  return {
+    data: Array.from({ length: 200 }, (_, index) => ({
+      turnId: `turn-${currentPage}-${index}`,
+      item: { type: "agentMessage", id: `message-${currentPage}-${index}`, text: "历史消息" },
+    })),
+    nextCursor: currentPage < 9 ? `cursor-${currentPage + 1}` : null,
+  };
+}, "thread-2000");
+assert.equal(fullHistory.messages.length, 2_000);
+assert.equal(page, 10);
 console.log(JSON.stringify({ ok: true, messageCount: result.messages.length }));

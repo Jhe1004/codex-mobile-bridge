@@ -15,6 +15,13 @@ class FilePreviewCacheTest {
     }
 
     @Test
+    fun projectScopedCacheKeySeparatesProjects() {
+        val first = stableCacheKey("project-a\nthread-a", "/project/report.html")
+        val second = stableCacheKey("project-b\nthread-a", "/project/report.html")
+        assertNotEquals(first, second)
+    }
+
+    @Test
     fun cachedFileNameUsesFullContentHashAndSafeName() {
         val hash = "a".repeat(64)
         val name = cacheFileName(hash, "四阶段 总览?.html")

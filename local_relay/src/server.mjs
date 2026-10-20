@@ -154,7 +154,7 @@ wss.on("connection", (ws, req) => {
     }
 
     if (role === "mac") {
-      if (!["event", "response", "snapshot", "status"].includes(message.type)) {
+      if (!["event", "response", "response.chunk", "snapshot", "status"].includes(message.type)) {
         safeSend(ws, { type: "relay.error", code: "unsupported_mac_message" });
         return;
       }

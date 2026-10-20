@@ -16,6 +16,7 @@ import { wakeDesktopThread } from "./desktop_wake.mjs";
 import { createThreadStatusAnalyzer } from "./thread_status.mjs";
 import { DesktopCompletionReconciler } from "./desktop_completion_reconciler.mjs";
 import { createFileUpload, desktopAttachmentContext, turnAttachmentInput } from "./file_upload.mjs";
+import { responseEnvelopes } from "./response_chunking.mjs";
 
 const projectRoot = process.env.CODEX_PROJECT_ROOT || os.homedir();
 const relayBase = process.env.RELAY_URL || "ws://127.0.0.1:18880/v1/ws";
@@ -48,6 +49,13 @@ const pending = new Map();
 const bridgeOwnedThreads = new Set();
 let bridgeReleaseTimer = null;
 let lastProjectCatalog = { projects: [], assignments: {} };
+const MAX_SYNC_MESSAGES = 2_000;
+
+function normalizedHistoryLimit(value, fallback) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(1, Math.min(MAX_SYNC_MESSAGES, Math.trunc(parsed)));
+}
 const knownThreads = new Map();
 const knownThreadSources = new Map();
 let snapshotInFlight = false;
@@ -81,6 +89,11 @@ const desktopCompletionReconciler = new DesktopCompletionReconciler({
 function sendRelay(message) {
   if (relay?.readyState !== WebSocket.OPEN) return false;
   relay.send(JSON.stringify(message));
+  return true;
+}
+
+function sendResponse(envelope) {
+  for (const part of responseEnvelopes(envelope)) if (!sendRelay(part)) return false;
   return true;
 }
 
@@ -131,7 +144,7 @@ async function listAllThreads(options = {}) {
   for (const thread of enriched.data) knownThreads.set(thread.id, thread);
   knownThreadSources.clear();
   for (const thread of annotated) knownThreadSources.set(thread.id, thread);
-  return enriched;
+  return { ...enriched, catalogComplete: true };
 }
 
 async function initialSnapshot() {
@@ -265,7 +278,7 @@ async function dispatchRequest(message) {
           rpc,
           payload.threadId,
           knownThreadSources.get(payload.threadId) ?? knownThreads.get(payload.threadId) ?? {},
-          { knownRevision: payload.knownRevision, limit: payload.limit ?? 120 },
+          { knownRevision: payload.knownRevision, limit: normalizedHistoryLimit(payload.limit, MAX_SYNC_MESSAGES) },
         );
         if (!result.notModified) {
           await fileLinkAuthorizer.rememberMessages(payload.threadId, result.messages);
@@ -281,7 +294,7 @@ async function dispatchRequest(message) {
           const sync = await syncRecentlyActiveThreads(rpc, threadList.data, {
             knownRevisions: payload.knownRevisions ?? {},
             getSourceThread: (thread) => knownThreadSources.get(thread.id) ?? thread,
-            limit: 120,
+            limit: normalizedHistoryLimit(payload.limit, 120),
             onProgress: payload.manual === true && payload.syncId ? (progress) => {
               sendRelay({
                 type: "event",
@@ -382,11 +395,11 @@ async function dispatchRequest(message) {
       default:
         throw new Error(`Unsupported action: ${action}`);
     }
-    sendRelay({ type: "response", requestId, ok: true, result });
+    sendResponse({ type: "response", requestId, ok: true, result });
   } catch (error) {
     const message = readableAppServerError(error);
     log("request_failed", { action, error: message });
-    sendRelay({ type: "response", requestId, ok: false, error: { code: "bridge_error", message } });
+    sendResponse({ type: "response", requestId, ok: false, error: { code: "bridge_error", message } });
     if (action === "turn.start" && bridgeOwnedThreads.delete(payload.threadId)) {
       scheduleBridgeWriterRelease("turn-start-failed");
     }

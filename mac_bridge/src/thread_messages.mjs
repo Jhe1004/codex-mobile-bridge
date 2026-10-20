@@ -28,7 +28,7 @@ export function visibleMessagesFromEntries(entries = []) {
   });
 }
 
-export async function listLatestVisibleMessages(rpc, threadId, maxMessages = 120) {
+export async function listLatestVisibleMessages(rpc, threadId, maxMessages = 2_000) {
   const newestFirst = [];
   let cursor = null;
   let pageCount = 0;
@@ -42,7 +42,7 @@ export async function listLatestVisibleMessages(rpc, threadId, maxMessages = 120
     newestFirst.push(...visibleMessagesFromEntries(page.data ?? []));
     cursor = page.nextCursor ?? null;
     pageCount += 1;
-  } while (cursor && newestFirst.length < maxMessages && pageCount < 8);
+  } while (cursor && newestFirst.length < maxMessages && pageCount < 40);
 
   return {
     threadId,

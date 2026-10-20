@@ -51,6 +51,12 @@ import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
 
 object BridgeClient {
+    private data class ChunkedResponse(
+        val total: Int,
+        val chunks: Array<ByteArray?>,
+        var receivedBytes: Int = 0,
+    )
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val mainHandler = Handler(Looper.getMainLooper())
     private val _state = MutableStateFlow(BridgeUiState())
@@ -63,6 +69,7 @@ object BridgeClient {
     private val pending = ConcurrentHashMap<String, (JSONObject) -> Unit>()
     private val pendingErrors = ConcurrentHashMap<String, (String) -> Unit>()
     private val pendingTimeouts = ConcurrentHashMap<String, Job>()
+    private val chunkedResponses = ConcurrentHashMap<String, ChunkedResponse>()
     private val cancelledAttachmentIds = ConcurrentHashMap.newKeySet<String>()
     private val latestSyncInFlight = ConcurrentHashMap.newKeySet<String>()
     private val recentSyncInFlight = AtomicBoolean(false)
@@ -71,6 +78,7 @@ object BridgeClient {
     @Volatile private var manualSyncId: String? = null
     @Volatile private var conversationCache: ConversationCacheStore? = null
     @Volatile private var catalogCache: CatalogCacheStore? = null
+    @Volatile private var projectCacheCoordinator: ProjectCacheCoordinator? = null
     private val catalogRestoreStarted = AtomicBoolean(false)
     @Volatile private var activeTransferId: String? = null
     @Volatile private var activeTransferFile: File? = null
@@ -80,7 +88,12 @@ object BridgeClient {
     // Starting a fresh baseline also clears false unread badges created by v1.
     private const val THREAD_READ_PREFS = "thread_read_state_v2"
     private const val THREAD_READ_INITIALIZED = "__initialized__"
-    private const val RECENT_SYNC_PREFS = "recent_thread_sync_v1"
+    private const val RECENT_SYNC_PREFS = "recent_thread_sync_v2"
+    private const val FULL_HISTORY_INITIALIZED = "__full_history_2000_initialized__"
+    private const val MAX_SYNC_MESSAGES = 2_000
+    private const val BACKGROUND_SYNC_TAIL_MESSAGES = 120
+    private const val MAX_RESPONSE_CHUNKS = 256
+    private const val MAX_CHUNKED_RESPONSE_BYTES = 128 * 1024 * 1024
     @Volatile private var sequenceKey = "default"
     @Volatile private var lastSeenSequence = 0L
 
@@ -88,6 +101,7 @@ object BridgeClient {
         appContext = context.applicationContext
         if (conversationCache == null) conversationCache = ConversationCacheStore.forContext(context.applicationContext)
         if (catalogCache == null) catalogCache = CatalogCacheStore.forContext(context.applicationContext)
+        if (projectCacheCoordinator == null) projectCacheCoordinator = ProjectCacheCoordinator.forContext(context.applicationContext)
         if (catalogRestoreStarted.compareAndSet(false, true)) {
             scope.launch {
                 val cached = catalogCache?.load() ?: return@launch
@@ -214,6 +228,7 @@ object BridgeClient {
             )
         }
         val preferences = context.getSharedPreferences(RECENT_SYNC_PREFS, Context.MODE_PRIVATE)
+        val fullHistory = manual || !preferences.getBoolean(FULL_HISTORY_INITIALIZED, false)
         val knownRevisions = JSONObject()
         preferences.all.forEach { (threadId, value) ->
             if (value is String && threadId.isNotBlank() && value.isNotBlank()) {
@@ -225,6 +240,7 @@ object BridgeClient {
             JSONObject()
                 .put("knownRevisions", knownRevisions)
                 .put("manual", manual)
+                .put("limit", if (fullHistory) MAX_SYNC_MESSAGES else BACKGROUND_SYNC_TAIL_MESSAGES)
                 .put("syncId", syncId),
             onError = { message ->
                 recentSyncInFlight.set(false)
@@ -234,7 +250,11 @@ object BridgeClient {
             },
         ) { result ->
             recentSyncInFlight.set(false)
-            parseRecentThreadSync(result)
+            parseRecentThreadSync(result, replaceHistory = fullHistory)
+            val failedCount = result.optJSONObject("sync")?.optInt("failedCount", 1) ?: 1
+            if (fullHistory && failedCount == 0) {
+                preferences.edit().putBoolean(FULL_HISTORY_INITIALIZED, true).apply()
+            }
             if (manual) finishManualSync(syncId, result.optJSONObject("sync") ?: JSONObject())
             runQueuedManualSync()
         }
@@ -334,7 +354,7 @@ object BridgeClient {
             error = null,
         )
         scope.launch {
-            val cached = conversationCache?.load(selected.id)
+            val cached = conversationCache?.load(selected)
             if (selectedCacheGeneration.get() != cacheGeneration || _state.value.selectedThread?.id != selected.id) return@launch
             if (cached != null) {
                 _state.update { current ->
@@ -448,7 +468,7 @@ object BridgeClient {
         val knownRevision = _state.value.loadedContentRevision
         request(
             "thread.latest",
-            JSONObject().put("threadId", threadId).put("limit", 120).put("knownRevision", knownRevision),
+            JSONObject().put("threadId", threadId).put("limit", MAX_SYNC_MESSAGES).put("knownRevision", knownRevision),
             onError = { message ->
                 latestSyncInFlight.remove(threadId)
                 if (reportErrors && _state.value.selectedThread?.id == threadId) {
@@ -814,13 +834,15 @@ object BridgeClient {
     }
 
     fun downloadFile(target: String, forceRefresh: Boolean = false) {
-        val threadId = _state.value.selectedThread?.id ?: return
+        val selectedThread = _state.value.selectedThread ?: return
+        val threadId = selectedThread.id
+        val projectId = selectedThread.projectId
         if (_state.value.fileTransfer != null) return
         val context = requireNotNull(appContext)
         val requestTarget = parseFileRequestTarget(target)
         if (requestTarget.path.isBlank()) return
         if (!forceRefresh) {
-            FilePreviewCache.find(context, threadId, requestTarget.path)?.let { cached ->
+            FilePreviewCache.find(context, projectId, threadId, requestTarget.path)?.let { cached ->
                 _state.value = _state.value.copy(
                     filePreview = cached.copy(fragment = requestTarget.fragment),
                     error = null,
@@ -846,10 +868,10 @@ object BridgeClient {
                 sha256 = result.getString("sha256"),
                 line = result.optInt("line").takeIf { result.has("line") && !result.isNull("line") },
             )
-            val directory = FilePreviewCache.directory(context)
+            val directory = FilePreviewCache.directory(context, projectId, threadId)
             val destination = File(directory, cacheFileName(meta.sha256, meta.name))
             findVerifiedCachedFile(directory, destination, meta)?.let { cachedFile ->
-                publishFilePreview(threadId, requestTarget.path, requestTarget.fragment, meta, cachedFile)
+                publishFilePreview(projectId, threadId, requestTarget.path, requestTarget.fragment, meta, cachedFile)
                 return@request
             }
             if (destination.exists()) destination.delete()
@@ -858,6 +880,7 @@ object BridgeClient {
             _state.value = _state.value.copy(fileTransfer = FileTransferState(meta.name, 0, meta.size))
             if (meta.size == 0L) finishFileTransfer(
                 transferId,
+                projectId,
                 threadId,
                 requestTarget.path,
                 requestTarget.fragment,
@@ -866,6 +889,7 @@ object BridgeClient {
                 MessageDigest.getInstance("SHA-256"),
             ) else fetchFileChunk(
                 transferId,
+                projectId,
                 threadId,
                 requestTarget.path,
                 requestTarget.fragment,
@@ -965,6 +989,7 @@ object BridgeClient {
 
     private fun fetchFileChunk(
         transferId: String,
+        projectId: String,
         threadId: String,
         target: String,
         fragment: String?,
@@ -988,15 +1013,16 @@ object BridgeClient {
             val nextOffset = result.getLong("nextOffset")
             _state.value = _state.value.copy(fileTransfer = FileTransferState(meta.name, nextOffset, meta.size))
             if (result.optBoolean("done") || nextOffset >= meta.size) {
-                finishFileTransfer(transferId, threadId, target, fragment, meta, destination, digest)
+                finishFileTransfer(transferId, projectId, threadId, target, fragment, meta, destination, digest)
             } else {
-                fetchFileChunk(transferId, threadId, target, fragment, meta, destination, nextOffset, digest)
+                fetchFileChunk(transferId, projectId, threadId, target, fragment, meta, destination, nextOffset, digest)
             }
         }
     }
 
     private fun finishFileTransfer(
         transferId: String,
+        projectId: String,
         threadId: String,
         requestedTarget: String,
         fragment: String?,
@@ -1011,10 +1037,11 @@ object BridgeClient {
             failFileTransfer(transferId, "文件完整性校验失败，请重新点击链接")
             return
         }
-        publishFilePreview(threadId, requestedTarget, fragment, meta, destination)
+        publishFilePreview(projectId, threadId, requestedTarget, fragment, meta, destination)
     }
 
     private fun publishFilePreview(
+        projectId: String,
         threadId: String,
         requestedTarget: String,
         fragment: String?,
@@ -1034,7 +1061,7 @@ object BridgeClient {
             fragment = fragment,
         )
         appContext?.let { context ->
-            FilePreviewCache.store(context, threadId, requestedTarget, preview, meta.sha256, meta.mtimeMs)
+            FilePreviewCache.store(context, projectId, threadId, requestedTarget, preview, meta.sha256, meta.mtimeMs)
         }
         Log.i("CodexFileTransfer", "name=${meta.name} bytes=${meta.size} cacheReady=true")
         _state.value = _state.value.copy(fileTransfer = null, filePreview = preview, error = null)
@@ -1175,6 +1202,7 @@ object BridgeClient {
         pendingErrors.clear()
         pendingTimeouts.values.forEach { it.cancel() }
         pendingTimeouts.clear()
+        chunkedResponses.clear()
         latestSyncInFlight.clear()
         recentSyncInFlight.set(false)
         manualSyncQueued.set(false)
@@ -1308,6 +1336,7 @@ object BridgeClient {
                 if (message.optBoolean("ok")) callback?.invoke(message.optJSONObject("result") ?: JSONObject())
                 else errorCallback?.invoke(message.optJSONObject("error")?.optString("message") ?: "请求失败")
             }
+            "response.chunk" -> handleResponseChunk(message)
             "snapshot" -> if (message.optString("snapshot") == "thread.list") {
                 parseThreads(message.optJSONObject("result") ?: JSONObject())
             }
@@ -1316,6 +1345,55 @@ object BridgeClient {
                 updateAppServerReadiness(message.optBoolean("ok"))
             }
         }
+    }
+
+    private fun handleResponseChunk(message: JSONObject) {
+        val requestId = message.optString("requestId")
+        val total = message.optInt("total")
+        val index = message.optInt("index", -1)
+        if (requestId.isBlank() || total !in 1..MAX_RESPONSE_CHUNKS || index !in 0 until total) {
+            failChunkedResponse(requestId, "收到无效的分块同步数据")
+            return
+        }
+        val bytes = runCatching { Base64.decode(message.getString("data"), Base64.DEFAULT) }.getOrElse {
+            failChunkedResponse(requestId, "无法解码分块同步数据")
+            return
+        }
+        val accumulator = chunkedResponses.compute(requestId) { _, current ->
+            current?.takeIf { it.total == total } ?: ChunkedResponse(total, arrayOfNulls(total))
+        } ?: return
+        val completed: ByteArray? = synchronized(accumulator) {
+            if (accumulator.chunks[index] == null) {
+                accumulator.chunks[index] = bytes
+                accumulator.receivedBytes += bytes.size
+            }
+            if (accumulator.receivedBytes > MAX_CHUNKED_RESPONSE_BYTES) {
+                null
+            } else if (accumulator.chunks.all { it != null }) {
+                ByteArrayOutputStream(accumulator.receivedBytes).use { output ->
+                    accumulator.chunks.forEach { output.write(requireNotNull(it)) }
+                    output.toByteArray()
+                }
+            } else {
+                ByteArray(0)
+            }
+        }
+        if (accumulator.receivedBytes > MAX_CHUNKED_RESPONSE_BYTES) {
+            failChunkedResponse(requestId, "同步内容过大，已安全停止")
+            return
+        }
+        if (completed == null || completed.isEmpty()) return
+        chunkedResponses.remove(requestId)
+        runCatching { handleMessage(JSONObject(completed.toString(Charsets.UTF_8))) }
+            .onFailure { failChunkedResponse(requestId, "无法组装分块同步数据") }
+    }
+
+    private fun failChunkedResponse(requestId: String, message: String) {
+        if (requestId.isBlank()) return
+        chunkedResponses.remove(requestId)
+        pending.remove(requestId)
+        pendingTimeouts.remove(requestId)?.cancel()
+        pendingErrors.remove(requestId)?.invoke(message)
     }
 
     private fun handleEvent(event: String, data: JSONObject) {
@@ -1418,10 +1496,10 @@ object BridgeClient {
         val previous = _state.value
         val items = applyReadState(rawItems, previous.selectedThread?.id)
         val selectedProject = previous.selectedProject?.let { selected ->
-            projects.firstOrNull { it.id == selected.id } ?: selected
+            projects.firstOrNull { it.id == selected.id }
         }
         val refreshedSelectedThread = previous.selectedThread?.let { selected ->
-            items.firstOrNull { it.id == selected.id } ?: selected
+            items.firstOrNull { it.id == selected.id }
         }
         val projectIds = projects.map { it.id }.toSet()
         val shouldInitializeExpansion = !previous.projectExpansionInitialized && projects.isNotEmpty()
@@ -1432,6 +1510,7 @@ object BridgeClient {
         } else {
             previous.expandedProjectIds
         }
+        val selectedThreadWasRemoved = previous.selectedThread != null && refreshedSelectedThread == null
         _state.value = _state.value.copy(
             threads = items,
             projects = projects.sortedBy { it.order },
@@ -1439,8 +1518,20 @@ object BridgeClient {
             projectExpansionInitialized = previous.projectExpansionInitialized || shouldInitializeExpansion,
             selectedProject = selectedProject,
             selectedThread = refreshedSelectedThread,
+            messages = if (selectedThreadWasRemoved) emptyList() else previous.messages,
+            filePreview = if (selectedThreadWasRemoved) null else previous.filePreview,
+            conversationContentState = if (selectedThreadWasRemoved) ConversationContentState.NONE else previous.conversationContentState,
+            loadedContentRevision = if (selectedThreadWasRemoved) "" else previous.loadedContentRevision,
         )
-        scope.launch { catalogCache?.save(projects, items) }
+        val catalogComplete = result.optBoolean("catalogComplete", false)
+        scope.launch {
+            val deletionConfirmed = if (catalogComplete) {
+                projectCacheCoordinator?.reconcile(previous.projects, previous.threads, projects, items) == true
+            } else {
+                false
+            }
+            catalogCache?.save(projects, items, allowEmpty = deletionConfirmed)
+        }
         if (allowSelectedRefresh && refreshedSelectedThread != null &&
             previous.loadedContentRevision.isNotBlank() &&
             refreshedSelectedThread.contentRevision.isNotBlank() &&
@@ -1453,7 +1544,7 @@ object BridgeClient {
         }
     }
 
-    private fun parseRecentThreadSync(result: JSONObject) {
+    private fun parseRecentThreadSync(result: JSONObject, replaceHistory: Boolean) {
         result.optJSONObject("threadList")?.let { parseThreads(it, allowSelectedRefresh = false) }
         val sync = result.optJSONObject("sync") ?: return
         val entries = sync.optJSONArray("data") ?: return
@@ -1472,16 +1563,22 @@ object BridgeClient {
             val revision = entry.optString("revision")
             if (revision.isNotBlank()) editor.putString(threadId, revision)
             if (_state.value.selectedThread?.id == threadId) {
-                parseLatestMessages(threadId, entry)
+                parseLatestMessages(threadId, entry, mergeTail = !replaceHistory)
             } else if (!entry.optBoolean("notModified")) {
                 val thread = _state.value.threads.firstOrNull { it.id == threadId } ?: continue
                 val messages = chatMessages(threadId, entry.optJSONArray("messages") ?: JSONArray())
                 if (revision.isNotBlank()) {
-                    scope.launch { conversationCache?.save(thread.copy(contentRevision = revision), messages) }
+                    scope.launch {
+                        val updated = thread.copy(contentRevision = revision)
+                        if (replaceHistory) conversationCache?.save(updated, messages)
+                        else conversationCache?.mergeTail(updated, messages)
+                    }
                 }
             }
         }
-        preferences.all.keys.filterNot(checkedThreadIds::contains).forEach(editor::remove)
+        preferences.all.keys
+            .filterNot { it.startsWith("__") || it in checkedThreadIds }
+            .forEach(editor::remove)
         editor.apply()
     }
 
@@ -1605,7 +1702,7 @@ object BridgeClient {
         _state.value = _state.value.copy(messages = messages)
     }
 
-    private fun parseLatestMessages(requestedThreadId: String, result: JSONObject) {
+    private fun parseLatestMessages(requestedThreadId: String, result: JSONObject, mergeTail: Boolean = false) {
         if (_state.value.selectedThread?.id != requestedThreadId) return
         val revision = result.optString("revision").ifBlank { _state.value.selectedThread?.contentRevision.orEmpty() }
         if (result.optBoolean("notModified")) {
@@ -1620,7 +1717,8 @@ object BridgeClient {
             prepareSelectedThread()
             return
         }
-        val messages = chatMessages(requestedThreadId, result.optJSONArray("messages") ?: JSONArray())
+        val serverMessages = chatMessages(requestedThreadId, result.optJSONArray("messages") ?: JSONArray())
+        val messages = if (mergeTail) mergeConversationTail(_state.value.messages, serverMessages) else serverMessages
         val merged = mergeServerMessages(requestedThreadId, messages, _state.value.pendingOutgoing)
         val selectedThread = _state.value.selectedThread?.let { selected ->
             if (selected.id == requestedThreadId && revision.isNotBlank()) selected.copy(contentRevision = revision) else selected

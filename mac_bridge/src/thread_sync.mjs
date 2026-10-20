@@ -35,7 +35,7 @@ export function visibleMessageRevision(messages = []) {
 
 export async function syncLatestVisibleMessages(rpc, threadId, thread, {
   knownRevision = "",
-  limit = 120,
+  limit = 2_000,
 } = {}) {
   // A thread can continue in a replacement rollout after context compaction,
   // migration, or Desktop restoration. The original file signature can then
