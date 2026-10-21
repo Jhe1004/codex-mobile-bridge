@@ -19,17 +19,34 @@ export async function startTurnOnThread(rpc, payload = {}, {
   const text = payload.text.trim() || "请查看我附加的文件。";
   const input = [{ type: "text", text, text_elements: [] }, ...attachmentInput];
   const clientUserMessageId = payload.clientUserMessageId || randomUUID();
+  const additionalContext = typeof payload.additionalContext === "string" && payload.additionalContext.trim()
+    ? payload.additionalContext
+    : null;
+  const turnRequest = {
+    threadId: payload.threadId,
+    input,
+    clientUserMessageId,
+    ...(additionalContext ? { additionalContext } : {}),
+  };
 
   // Desktop owns most saved conversations. Its IPC follower path asks that
   // exact owner to start the turn immediately, even while the chat is closed.
   if (desktopIpc && !preferBridge) {
     try {
-      const accepted = await desktopIpc.startTurn(payload.threadId, input, clientUserMessageId, null, payload.desktopAttachments ?? []);
+      const accepted = await desktopIpc.startTurn(
+        payload.threadId,
+        input,
+        clientUserMessageId,
+        null,
+        payload.desktopAttachments ?? [],
+        additionalContext,
+      );
       return {
         accepted: true,
         delivery: "desktop-ipc",
         clientUserMessageId,
         ownerClientId: accepted.ownerClientId,
+        attachmentContextInjected: attachmentInput.length === 0 || Boolean(additionalContext),
       };
     } catch (error) {
       if (!(error instanceof DesktopOwnerUnavailableError)) throw error;
@@ -60,12 +77,14 @@ export async function startTurnOnThread(rpc, payload = {}, {
             clientUserMessageId,
             ownerClientId,
             payload.desktopAttachments ?? [],
+            additionalContext,
           );
           return {
             accepted: true,
             delivery: "desktop-ipc-after-wake",
             clientUserMessageId,
             ownerClientId: accepted.ownerClientId,
+            attachmentContextInjected: attachmentInput.length === 0 || Boolean(additionalContext),
           };
         }
       } catch (error) {
@@ -79,23 +98,25 @@ export async function startTurnOnThread(rpc, payload = {}, {
   // submission as sent.
   onBridgeOwnership?.(payload.threadId);
   try {
-    const result = await rpc("turn/start", {
-      threadId: payload.threadId,
-      input,
+    const result = await rpc("turn/start", turnRequest);
+    return {
+      ...result,
+      delivery: "bridge-app-server",
       clientUserMessageId,
-    });
-    return { ...result, delivery: "bridge-app-server", clientUserMessageId };
+      attachmentContextInjected: attachmentInput.length === 0 || Boolean(additionalContext),
+    };
   } catch (error) {
     if (!String(error?.message ?? error).toLowerCase().includes("not loaded")) throw error;
   }
 
   await rpc("thread/resume", { threadId: payload.threadId, excludeTurns: true });
-  const result = await rpc("turn/start", {
-    threadId: payload.threadId,
-    input,
+  const result = await rpc("turn/start", turnRequest);
+  return {
+    ...result,
+    delivery: "bridge-app-server",
     clientUserMessageId,
-  });
-  return { ...result, delivery: "bridge-app-server", clientUserMessageId };
+    attachmentContextInjected: attachmentInput.length === 0 || Boolean(additionalContext),
+  };
 }
 
 export function readableAppServerError(error) {

@@ -15,7 +15,12 @@ import { createDesktopThreadPreparer } from "./desktop_prepare.mjs";
 import { wakeDesktopThread } from "./desktop_wake.mjs";
 import { createThreadStatusAnalyzer } from "./thread_status.mjs";
 import { DesktopCompletionReconciler } from "./desktop_completion_reconciler.mjs";
-import { createFileUpload, desktopAttachmentContext, turnAttachmentInput } from "./file_upload.mjs";
+import {
+  attachmentAdditionalContext,
+  createFileUpload,
+  desktopAttachmentContext,
+  turnAttachmentInput,
+} from "./file_upload.mjs";
 import { responseEnvelopes } from "./response_chunking.mjs";
 
 const projectRoot = process.env.CODEX_PROJECT_ROOT || os.homedir();
@@ -355,6 +360,7 @@ async function dispatchRequest(message) {
             ...payload,
             attachmentInput: turnAttachmentInput(attachments),
             desktopAttachments: desktopAttachmentContext(attachments),
+            additionalContext: attachmentAdditionalContext(attachments),
           }, {
             desktopIpc,
             preferBridge: bridgeOwnedThreads.has(payload.threadId),
@@ -364,7 +370,12 @@ async function dispatchRequest(message) {
               bridgeOwnedThreads.add(threadId);
             },
           });
-          log("turn_delivery", { threadId: payload.threadId, delivery: result.delivery, attachmentCount: attachments.length });
+          log("turn_delivery", {
+            threadId: payload.threadId,
+            delivery: result.delivery,
+            attachmentCount: attachments.length,
+            attachmentContextInjected: attachments.length === 0 || Boolean(result.attachmentContextInjected),
+          });
           if (result.delivery.startsWith("desktop-ipc")) {
             desktopCompletionReconciler.track({
               threadId: payload.threadId,

@@ -98,7 +98,14 @@ export class DesktopIpcClient {
     return null;
   }
 
-  async startTurn(threadId, input, clientUserMessageId = randomUUID(), knownOwnerClientId = null, attachments = []) {
+  async startTurn(
+    threadId,
+    input,
+    clientUserMessageId = randomUUID(),
+    knownOwnerClientId = null,
+    attachments = [],
+    additionalContext = null,
+  ) {
     const ownerClientId = knownOwnerClientId || await this.findThreadOwner(threadId);
     if (!ownerClientId) throw new DesktopOwnerUnavailableError();
     let following = false;
@@ -120,6 +127,7 @@ export class DesktopIpcClient {
               // renderer also reads text_elements while rendering the turn.
               input,
               clientUserMessageId,
+              ...(additionalContext ? { additionalContext } : {}),
             },
             context: { attachments },
           },

@@ -81,7 +81,14 @@ await new Promise((resolve, reject) => {
 
 const client = new DesktopIpcClient({ socketPath, clientType: "shape-test" });
 try {
-  await client.startTurn("01a13fe2-bb25-7143-b379-73a005c2ff38", [{ type: "text", text: "手机文本", text_elements: [] }]);
+  await client.startTurn(
+    "01a13fe2-bb25-7143-b379-73a005c2ff38",
+    [{ type: "text", text: "手机文本", text_elements: [] }],
+    undefined,
+    null,
+    [{ label: "notes.txt", path: "/private/tmp/notes.txt", fsPath: "/private/tmp/notes.txt", isImageAttachment: false }],
+    "# Files mentioned by the user:\n\n## notes.txt: /private/tmp/notes.txt",
+  );
   await client.setThreadFollowing("01a13fe2-bb25-7143-b379-73a005c2ff38", "desktop-owner", false);
   await new Promise((resolve) => setTimeout(resolve, 25));
   assert.deepEqual(capturedTurnStart?.request?.input, [{
@@ -89,6 +96,8 @@ try {
     text: "手机文本",
     text_elements: [],
   }]);
+  assert.match(capturedTurnStart?.request?.additionalContext, /notes\.txt/);
+  assert.equal(capturedTurnStart?.context?.attachments?.[0]?.fsPath, "/private/tmp/notes.txt");
   assert.deepEqual(followingStates, [true, false]);
   assert.deepEqual(protocolOrder, ["follow", "start-turn", "unfollow"]);
   await assert.rejects(

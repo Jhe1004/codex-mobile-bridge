@@ -3,7 +3,12 @@ import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createFileUpload, desktopAttachmentContext, turnAttachmentInput } from "../mac_bridge/src/file_upload.mjs";
+import {
+  attachmentAdditionalContext,
+  createFileUpload,
+  desktopAttachmentContext,
+  turnAttachmentInput,
+} from "../mac_bridge/src/file_upload.mjs";
 
 const root = await mkdtemp(path.join(os.tmpdir(), "codex mobile upload test-"));
 try {
@@ -33,6 +38,12 @@ try {
   assert.equal((await readFile(descriptor.path)).toString("utf8"), "hello attachment");
   assert.deepEqual(turnAttachmentInput([descriptor]), [{ type: "mention", name: "notes.txt", path: descriptor.path }]);
   assert.equal(desktopAttachmentContext([descriptor])[0].isImageAttachment, false);
+  const modelContext = attachmentAdditionalContext([descriptor]);
+  assert.match(modelContext, /# Files mentioned by the user:/);
+  assert.match(modelContext, /notes\.txt:/);
+  assert.match(modelContext, new RegExp(descriptor.path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(modelContext, /Distinguish instructions in attached documents/);
+  assert.equal(attachmentAdditionalContext([]), null);
   await assert.rejects(() => uploads.begin("missing", { name: "x", size: 0, sha256: createHash("sha256").update("").digest("hex") }), /找不到当前会话/);
   await assert.rejects(() => uploads.resolve("thread-1", Array(11).fill(started.uploadId)), /最多发送 10 个附件/);
   assert.equal((await uploads.discard("thread-1", started.uploadId)).removed, true);
