@@ -45,6 +45,18 @@ try {
   assert.match(modelContext.codex_mobile_bridge_files.value, new RegExp(descriptor.path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.match(modelContext.codex_mobile_bridge_files.value, /Distinguish instructions in attached documents/);
   assert.equal(attachmentAdditionalContext([]), null);
+
+  const restartedUploads = createFileUpload({
+    uploadRoot: root,
+    threadExists: (threadId) => threadId === "thread-1",
+    maxFileBytes: 1024,
+    chunkBytes: 8,
+  });
+  const [recovered] = await restartedUploads.resolve("thread-1", [started.uploadId]);
+  assert.equal(recovered.path, descriptor.path);
+  assert.equal(recovered.sha256, descriptor.sha256);
+  assert.equal(recovered.mimeType, "text/plain");
+  await assert.rejects(() => restartedUploads.resolve("thread-2", [started.uploadId]), /附件已失效/);
   await assert.rejects(() => uploads.begin("missing", { name: "x", size: 0, sha256: createHash("sha256").update("").digest("hex") }), /找不到当前会话/);
   await assert.rejects(() => uploads.resolve("thread-1", Array(11).fill(started.uploadId)), /最多发送 10 个附件/);
   assert.equal((await uploads.discard("thread-1", started.uploadId)).removed, true);

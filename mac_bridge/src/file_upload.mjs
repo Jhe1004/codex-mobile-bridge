@@ -1,12 +1,33 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { mkdir, open, readdir, realpath, rename, rm, stat } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 const DEFAULT_MAX_FILE_BYTES = 100 * 1024 * 1024;
 const DEFAULT_CHUNK_BYTES = 512 * 1024;
 const DEFAULT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const UPLOAD_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const MIME_BY_EXTENSION = new Map([
+  [".csv", "text/csv"],
+  [".doc", "application/msword"],
+  [".docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
+  [".gif", "image/gif"],
+  [".html", "text/html"],
+  [".jpeg", "image/jpeg"],
+  [".jpg", "image/jpeg"],
+  [".pdf", "application/pdf"],
+  [".png", "image/png"],
+  [".ppt", "application/vnd.ms-powerpoint"],
+  [".pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation"],
+  [".svg", "image/svg+xml"],
+  [".tsv", "text/tab-separated-values"],
+  [".txt", "text/plain"],
+  [".webp", "image/webp"],
+  [".xls", "application/vnd.ms-excel"],
+  [".xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
+]);
 
 function safeFileName(rawName) {
   const normalized = path.basename(String(rawName || "upload.bin"))
@@ -67,6 +88,7 @@ export function createFileUpload({
       if (now - entry.createdAtMs <= retentionMs) continue;
       ready.delete(uploadId);
       await rm(entry.path, { force: true }).catch(() => {});
+      await rm(`${entry.path}.meta.json`, { force: true }).catch(() => {});
     }
     await ensureRoot();
     const entries = await readdir(pendingRoot, { withFileTypes: true }).catch(() => []);
@@ -78,6 +100,55 @@ export function createFileUpload({
       const maxAge = entry.name.endsWith(".partial") ? Math.min(retentionMs, 60 * 60 * 1000) : retentionMs;
       if (now - info.mtimeMs > maxAge) await rm(filePath, { force: true }).catch(() => {});
     }
+  }
+
+  async function persistDescriptor(descriptor) {
+    await writeFile(`${descriptor.path}.meta.json`, `${JSON.stringify({
+      uploadId: descriptor.uploadId,
+      threadId: descriptor.threadId,
+      name: descriptor.name,
+      mimeType: descriptor.mimeType,
+      size: descriptor.size,
+      sha256: descriptor.sha256,
+      createdAtMs: descriptor.createdAtMs,
+    })}\n`, { mode: 0o600 });
+  }
+
+  async function recoverDescriptor(threadId, rawUploadId) {
+    const uploadId = String(rawUploadId || "");
+    if (!UPLOAD_ID_PATTERN.test(uploadId)) return null;
+    await ensureRoot();
+    for (const [root, sent] of [[pendingRoot, false], [sentRoot, true]]) {
+      const names = await readdir(root).catch(() => []);
+      const fileName = names.find((name) => name.startsWith(`${uploadId}-`)
+        && !name.endsWith(".partial") && !name.endsWith(".meta.json"));
+      if (!fileName) continue;
+      const filePath = await realpath(path.join(root, fileName)).catch(() => null);
+      if (!filePath || !belongsToRoot(filePath, root)) continue;
+      const info = await stat(filePath).catch(() => null);
+      if (!info?.isFile()) continue;
+      let stored = null;
+      try {
+        stored = JSON.parse(await readFile(`${filePath}.meta.json`, "utf8"));
+      } catch {}
+      if (stored && (stored.uploadId !== uploadId || stored.threadId !== threadId)) return null;
+      const name = safeFileName(stored?.name || fileName.slice(uploadId.length + 1));
+      const descriptor = {
+        uploadId,
+        threadId,
+        name,
+        mimeType: String(stored?.mimeType || MIME_BY_EXTENSION.get(path.extname(name).toLowerCase()) || "application/octet-stream"),
+        size: info.size,
+        sha256: validSha256(stored?.sha256) ? stored.sha256 : await sha256(filePath),
+        path: filePath,
+        createdAtMs: Number.isFinite(stored?.createdAtMs) ? stored.createdAtMs : info.mtimeMs,
+        sent,
+      };
+      ready.set(uploadId, descriptor);
+      if (!stored) await persistDescriptor(descriptor);
+      return descriptor;
+    }
+    return null;
   }
 
   async function begin(threadId, { name, mimeType, size, sha256: expectedSha256 } = {}) {
@@ -149,6 +220,7 @@ export function createFileUpload({
         createdAtMs: entry.createdAtMs,
       };
       ready.set(uploadId, descriptor);
+      await persistDescriptor(descriptor);
       return { uploadId, name: descriptor.name, mimeType: descriptor.mimeType, size: descriptor.size };
     } catch (error) {
       await rm(entry.partialPath, { force: true }).catch(() => {});
@@ -168,6 +240,7 @@ export function createFileUpload({
     if (completed && completed.threadId === threadId) {
       ready.delete(uploadId);
       await rm(completed.path, { force: true }).catch(() => {});
+      await rm(`${completed.path}.meta.json`, { force: true }).catch(() => {});
       return { removed: true };
     }
     return { removed: false };
@@ -176,18 +249,21 @@ export function createFileUpload({
   async function resolve(threadId, uploadIds = []) {
     if (!Array.isArray(uploadIds) || uploadIds.length > 10) throw new Error("一次最多发送 10 个附件");
     if (!resolvedRoot) await ensureRoot();
-    const attachments = uploadIds.map((uploadId) => {
-      const entry = ready.get(String(uploadId));
+    const attachments = [];
+    for (const uploadId of uploadIds) {
+      const entry = ready.get(String(uploadId)) || await recoverDescriptor(threadId, uploadId);
       if (!entry || entry.threadId !== threadId) throw new Error("附件已失效，请重新选择文件");
-      return entry;
-    });
+      attachments.push(entry);
+    }
     for (const entry of attachments) {
       if (entry.sent) continue;
       const destination = path.join(sentRoot, path.basename(entry.path));
       if (!belongsToRoot(destination, sentRoot)) throw new Error("附件持久化路径不安全");
       await rename(entry.path, destination);
+      await rename(`${entry.path}.meta.json`, `${destination}.meta.json`).catch(() => {});
       entry.path = destination;
       entry.sent = true;
+      await persistDescriptor(entry);
     }
     return attachments;
   }
