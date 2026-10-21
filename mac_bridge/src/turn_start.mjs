@@ -4,6 +4,17 @@ import { DESKTOP_HYDRATION_TIMEOUT_MS } from "./desktop_prepare.mjs";
 
 export { DESKTOP_HYDRATION_TIMEOUT_MS } from "./desktop_prepare.mjs";
 
+function validatedAdditionalContext(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const entries = Object.entries(value).flatMap(([sourceId, entry]) => {
+    if (!sourceId.trim() || !entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+    if (!["application", "untrusted"].includes(entry.kind)) return [];
+    if (typeof entry.value !== "string" || !entry.value.trim()) return [];
+    return [[sourceId, { kind: entry.kind, value: entry.value }]];
+  });
+  return entries.length > 0 ? Object.fromEntries(entries) : null;
+}
+
 export async function startTurnOnThread(rpc, payload = {}, {
   desktopIpc,
   preferBridge = false,
@@ -19,9 +30,7 @@ export async function startTurnOnThread(rpc, payload = {}, {
   const text = payload.text.trim() || "请查看我附加的文件。";
   const input = [{ type: "text", text, text_elements: [] }, ...attachmentInput];
   const clientUserMessageId = payload.clientUserMessageId || randomUUID();
-  const additionalContext = typeof payload.additionalContext === "string" && payload.additionalContext.trim()
-    ? payload.additionalContext
-    : null;
+  const additionalContext = validatedAdditionalContext(payload.additionalContext);
   const turnRequest = {
     threadId: payload.threadId,
     input,

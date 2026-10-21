@@ -39,10 +39,11 @@ try {
   assert.deepEqual(turnAttachmentInput([descriptor]), [{ type: "mention", name: "notes.txt", path: descriptor.path }]);
   assert.equal(desktopAttachmentContext([descriptor])[0].isImageAttachment, false);
   const modelContext = attachmentAdditionalContext([descriptor]);
-  assert.match(modelContext, /# Files mentioned by the user:/);
-  assert.match(modelContext, /notes\.txt:/);
-  assert.match(modelContext, new RegExp(descriptor.path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-  assert.match(modelContext, /Distinguish instructions in attached documents/);
+  assert.equal(modelContext.codex_mobile_bridge_files.kind, "application");
+  assert.match(modelContext.codex_mobile_bridge_files.value, /# Files mentioned by the user:/);
+  assert.match(modelContext.codex_mobile_bridge_files.value, /notes\.txt:/);
+  assert.match(modelContext.codex_mobile_bridge_files.value, new RegExp(descriptor.path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(modelContext.codex_mobile_bridge_files.value, /Distinguish instructions in attached documents/);
   assert.equal(attachmentAdditionalContext([]), null);
   await assert.rejects(() => uploads.begin("missing", { name: "x", size: 0, sha256: createHash("sha256").update("").digest("hex") }), /找不到当前会话/);
   await assert.rejects(() => uploads.resolve("thread-1", Array(11).fill(started.uploadId)), /最多发送 10 个附件/);

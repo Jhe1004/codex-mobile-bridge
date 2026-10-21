@@ -87,7 +87,12 @@ try {
     undefined,
     null,
     [{ label: "notes.txt", path: "/private/tmp/notes.txt", fsPath: "/private/tmp/notes.txt", isImageAttachment: false }],
-    "# Files mentioned by the user:\n\n## notes.txt: /private/tmp/notes.txt",
+    {
+      codex_mobile_bridge_files: {
+        kind: "application",
+        value: "# Files mentioned by the user:\n\n## notes.txt: /private/tmp/notes.txt",
+      },
+    },
   );
   await client.setThreadFollowing("01a13fe2-bb25-7143-b379-73a005c2ff38", "desktop-owner", false);
   await new Promise((resolve) => setTimeout(resolve, 25));
@@ -96,7 +101,8 @@ try {
     text: "手机文本",
     text_elements: [],
   }]);
-  assert.match(capturedTurnStart?.request?.additionalContext, /notes\.txt/);
+  assert.equal(capturedTurnStart?.request?.additionalContext?.codex_mobile_bridge_files?.kind, "application");
+  assert.match(capturedTurnStart?.request?.additionalContext?.codex_mobile_bridge_files?.value, /notes\.txt/);
   assert.equal(capturedTurnStart?.context?.attachments?.[0]?.fsPath, "/private/tmp/notes.txt");
   assert.deepEqual(followingStates, [true, false]);
   assert.deepEqual(protocolOrder, ["follow", "start-turn", "unfollow"]);

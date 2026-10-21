@@ -104,7 +104,12 @@ await startTurnOnThread(async () => { throw new Error("Desktop should accept att
   desktopAttachments: [
     { label: "example.png", path: "/private/tmp/example.png", fsPath: "/private/tmp/example.png", isImageAttachment: true },
   ],
-  additionalContext: "# Files mentioned by the user:\n\n## notes.txt: /private/tmp/notes.txt",
+  additionalContext: {
+    codex_mobile_bridge_files: {
+      kind: "application",
+      value: "# Files mentioned by the user:\n\n## notes.txt: /private/tmp/notes.txt",
+    },
+  },
 }, {
   desktopIpc: {
     async startTurn(threadId, input, clientUserMessageId, ownerClientId, attachments, additionalContext) {
@@ -116,7 +121,8 @@ await startTurnOnThread(async () => { throw new Error("Desktop should accept att
 assert.equal(attachmentCalls.length, 1);
 assert.deepEqual(attachmentCalls[0].input.map((item) => item.type), ["text", "localImage", "mention"]);
 assert.equal(attachmentCalls[0].attachments[0].isImageAttachment, true);
-assert.match(attachmentCalls[0].additionalContext, /notes\.txt/);
+assert.equal(attachmentCalls[0].additionalContext.codex_mobile_bridge_files.kind, "application");
+assert.match(attachmentCalls[0].additionalContext.codex_mobile_bridge_files.value, /notes\.txt/);
 
 assert.equal(readableAppServerError(new Error('{"code":-32000,"message":"Thread is not loaded"}')), "Thread is not loaded");
 assert.equal(readableAppServerError(new Error("plain failure")), "plain failure");
